@@ -1,0 +1,13 @@
+Job Name,Databricks URL,App Name,GitHub URL
+dm_etl_extract_new_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/5571,dm-extract,https://github.com/dollarshaveclub/dm_extract/tree/develop
+dm_etl_esp_extract_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/5592,dm-esp-extract,https://github.com/dollarshaveclub/dm_esp_extract/tree/develop
+dm_tmp_transform_prod,https://dbc-aafd93be-d844.cloud.databricks.com/#job/10662,dm-tmp-transform-prod,https://github.com/dollarshaveclub/dm_temp_transform
+dm_etl_customer_status_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/2149,dm-customer-status,https://github.com/dollarshaveclub/dm_customer_status/tree/develop
+dm_etl_dpr_extract_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/2090,dm-dpr,https://github.com/dollarshaveclub/dm_dpr/tree/develop
+dm_etl_optimove_export_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/2456,dm-optimove-export,https://github.com/dollarshaveclub/dm_optimove_export/tree/develop
+dm_etl_transform_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/2148,dm-transform,https://github.com/dollarshaveclub/dm_transform/tree/develop
+dm_daily_reports_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/8996,dm-daily-reports,https://github.com/dollarshaveclub/dm_daily_reports/tree/develop
+dm_optimove_import_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/2596,dm-optimove-import,https://github.com/dollarshaveclub/dm_optimove_import/tree/develop
+dm_optouts_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/8393,dm-optouts,https://github.com/dollarshaveclub/dm_optouts/tree/develop
+dm-ga360-import_prod,https://dbc-aafd93be-d844.cloud.databricks.com/#job/13288,dm-ga,https://github.com/dollarshaveclub/dm_ga/tree/master
+dm-ga360-export_prod,https://dbc-aafd93be-d844.cloud.databricks.com/#job/13288,dm-ga,https://github.com/dollarshaveclub/dm_ga/tree/master

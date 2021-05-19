@@ -1,0 +1,107 @@
+,,,,,,,
+Table Name,Focus Area,"Data Source 
+( Redshift: Stage, Temp, DM, Spectrum...)",Business Critical,Business Purpose & Insights Driven,Key Metrics,Key Dimensions,"Joins
+( Join to other Key Tables)"
+D_CUSTOMER_PLAN_360,Customer and Marketing Analytics,DMT,High,"all the classic and FS member , plan information.
+
+Table tracks the sign up and all the subsequent reactivation information for a customer through plan and sub_plan_rank
+
+
+","New Members
+Cancels
+","funnel SKU List (POE)
+Sub_Plan_Rank
+Member Status
+Plan Start Date
+Plan End Date
+BM_TYPE
+Plan_Conversion_Source
+Churn_Type
+Cancel_Reason, Prev_type","F_INVOICE ON CUSTOMER_ID
+
+F_INVOICE_PRODUCT ON CUSTOMER_ID
+
+RPT_MEMBER ON CUSTOMER_ID
+
+ADOBE_VISIT_SUMMARY ON ( post_visid_high,post_visid_low)"
+D_CUSTOMER_360,Customer and Marketing Analytics,DMT,High,"We pull frequency and plan information from this table, as well as original cohort start month","Frequency,  POE, Cohort, Migrated/Not-Migrated","Initial_plan_frequency, initial_funnel_sku_lsit, first_customer_subscription_start_date_time, initial_plan_plan_start_at, plan_conversion_source, current_plan_bills_at, current_subscription_frequency, initial plan frequency, current plan frequency",CUSTOMER_ID
+F_INVOICE,Customer and Marketing Analytics,DMT,High,This table contains spend information,Revenue,"amount_true, shipment_shipped_at, shipment_created_at, business_model_filter, order_attribution_attribution_type, count shipment_id",CUSTOMER_ID
+TEST_CUSTOMERS,Customer and Marketing Analytics,STG,High,This table identifies test customer ids that need to be removed from reporting,Test Customer Identification,CUSTOMER_ID,CUSTOMER_ID
+V_CUSTOMER_AXCIOM,Demographics,DMT,High,This table contains all the demographic information from Axciom,"Age, Gender, Income, Etc.","age_in_two_year_increments_input_individual_8626, gender_input_indiviaul_8688, income_estimated_household_8641",CUSTOMER_ID
+VISIT_LEVEL_GETSTARTEDCOMPLETE_PAGE_METADATA,Web Analytics,TMP,High,This table pulls in metadata to show the pages the customer saw in the checkout flow,Page seen prior to checkoukt,PRIOR_URL,"Post Visid High, Post Visid Low, Visit Num, Visit Start Time Gmt Epoch"
+BOX_CONFIGURATION,Customer and Marketing Analytics,TMP,High,This table shows the contents of the customer's first box,Box contents,box_config_name,CUSTOMER_ID
+F_INVOICE_PRODUCT,Product Analytics,DMT,High,This table contains products associated with each order as well as quantity and unit price,"Quantity, gross rev, net rev","name, product_sku","PRODUCT_ID, ORDER_ID"
+D_PRODUCT,Product Analytics,DMT,High,Product detail for each SKU,n/a,"product_category, name, internal_name, SKU",PRODUCT_ID
+RPT_EMAIL_SUMMARY,CRM Analytics,DMT,High,Email campaign send data with high level email metrics,"Sends, Opens, Clicks","campaign name, send date","PK_HASH, CAMPAIGN_ID"
+RPT_EMAIL_PERFORMANCE,CRM Analytics,DMT,High,This table has product adds within email attribution windows,"Add qty, revenue excluding discount, revenue including discount","customer_ID, campaign_id, campaign_name, product_id","PK_HASH, CAMPAIGN_ID, CUSTOMER_ID, PRODUCT_ID, INVOICE_ID, SCHEDULED_CART_ID, PLNA_ID"
+CHEETAH_OPTIMOVE_EMAIL_SENDS,CRM Analytics,STG,High,"Email send, opens, clicks on customer level granularity","send time, opens, min_open_time, clicks, min_click_time","customer_id, campaign_id","CUSTOMER_ID, CAMPAIGN_ID"
+MARKETING_CAMPAIGN_UNSUBSCRIBES,CRM Analytics,STG,Low,This table contains email unsubscribes and batch process dates for each member,Opt out date time,customer_id,CUSTOMER_ID
+OPTIMOVE_CUSTOMER_OUTPUT,CRM Analytics,STG,Medium,Optimove microsegments for each member,microsegment_name,customer_id,"customer_id, initial_microsegment_id, final_microsegment_id"
+OPTIMOVE_MICROSEGMENTS,CRM Analytics,STG,Medium,This table has Optimove future value and churn scores for each microsegment,"future_value, churn_rate",value_segment,microsegment_id
+RPT_MEMBER,Customer and Marketing Analytics,DMT,High,Member demographic and plan information,,,
+RPT_MBO_ORDER,Customer and Marketing Analytics,DMT,High,Aggregated order data,,,
+MBO_ORDER_BASE,Customer and Marketing Analytics,STG,High,"Order level data with box type, number, and other attributes",,box_type,"customer_id, order_id"
+DSC_PROD_SCHEDULED_CART_ITEMS,Product Analytics,STG,Medium,Product adds for each member's plan and cart,,,
+PS_CLOSED_SCHEDULED_CART_ITEMS,Product Analytics,STG,Low,Closed cart product view with information on add type,,,
+PS_SCHEDULED_CART_ITEMS,Product Analytics,STG,HIGH,Product adds for each member's plan and cart,,"total_price, customer_id, scheduled_cart_created_at, scheduled_cart_closed_at, quantity, removed, id, scheduled_cart_id, product_id, base_unit_price, unit_price",customer_id
+PS_SCHEDULED_CARTS,Revenue Pacing,STG,HIGH,,,"id, plan_id, customer_id, shceduled_cart_created_at, scheduled_cart_closed_at",customer_id
+ORDER_FREQUENCY_MAPPING,Forecasting,STG,Medium,Historical  customer frequency at time of shipment,,Frequency,"customer_ID, order_id, invoice_id"
+ERP_REFUNDS,Refunds,STG,HIGH,For tracking fraud and non-fraud refunds,"Amount, Count","processed_at_date_time, shop_id, payments, type",payment_id
+CUSTOMER_COHORT_MEMBERS,Fraud,STG,HIGH,,,"cohort_id, type",customer_id
+SEP_OCT_DEC_2019_CONSOLIDATED_FLATS_COHORTS,Forecasting,TMP,HIGH,This is a list of customer_id's who were force-migrated to consolidated flats,,CUSTOMER_ID,CUSTOMER_ID
+D_CUSTOMER,Customer and Marketing Analytics,DMT,High,"We use the email field for specific customer data, most used is email not like '%@dollarshaveclub.%'",DSC Customer Identification,"Customer ID, Email",CUSTOMER_ID
+ADOBE_VISIT_SUMMARY,Web Analytics,DMT,High,Visit tracking for site analytics,,,
+ADRA_PLANS_AND_ORDER_ITEMS_POC,Customer & Product Analystics,TMP,High,table tracks a number of metrics from plan signups through products purchased,,,
+ADRA_RESTOCK_BOX_SHIPMENT_RANK,Customer & Product Analystics,TMP,Medium,Ranks restock boxes by customer by plan by shipment shipped at,,plan shipment rank,"ADRA_PLANS_AND_ORDER_ITEMS_POC
+F_INVOICE"
+ADRA_PLAN_BOX_SHIPMENT_RANK,Customer & Product Analystics,TMP,Medium,Ranks all boxes by customer by plan by shipment shipped at,,plan order shipment rank,"ADRA_PLANS_AND_ORDER_ITEMS_POC
+F_INVOICE"
+STAQ_DAILY_SPEND,Marketing Analytics,DMT,High,Acquisition Media Spend & Signups by Channel,"spend, fees, credits, new members, reactivations","utms, deal type, country",
+DAILY_ACTIVE_SUBS_AND_FREQUENCY_POC,Customer Analytics,TMP,High,used to track ending active member base with historical frequency,,"date, historical frequency, bm_type",
+F_CUSTOMER_CREDIT,Customer Credit,DMT,Low,Identify Gift Card credits and when credits are recognized,,"credit_type, created_at, currency_code, shop_name, shop_code",
+CUSTOMER_CREDITS,Customer Credits,DSC_PROD,High,Identify credit types and amounts,Credit_type,"sum_amount, count, created_month, shop_id",customer_id
+ADOBE_SRC_PROD,Web Analytics,STG,High,"Ability to understand and provide insight into all web pathing, web events, etc; often used to measure the success of new features, A/B tests, troubleshoot issues brought forth by QA, etc.","Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"Post Visid High, Post Visid Low, Visit Num, Visit Start Time Gmt Epoch (Adobe Visit Summary, Customer Plan 360)"
+hl_add_to_cart ,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_add_to_subscription,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_experiment_set_assignments,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_product_impression,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_product_set_impression,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_purchase,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_quantity_change_cart ,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_quantity_change_subscription,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_remove_from_cart,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_remove_from_subscription,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_subscription_set_impression,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_survey_question_set_answered ,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_survey_question_set_impression,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_user_info ,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_wait_list_signup,Web Analytics,Spectrum,High,Developed to give us a more reliable source of information about a customer’s signup experience: we needed to know the products people saw and engaged with on the way to creating an account and completing a purchase,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,"mcvisid (Adobe Visit Summary), obfuscated customer ID, obfuscated order ID"
+hl_base_parsed,Web Analytics,Temp,High,Ability to tie all halo events together,"Conversion, churn, feature engagement (and how that leads to increased SPM, LTV, etc.)",,
+tmp.sku_mapping_comp_to_phys,Product Analytics,TMP,Medium,"Ability to analyze the add to cart to items vs. product invoiced,shipped using refrence SKU and Physical SKU",,mapping of composite/reference SKU to Physical SKU,joins to Invoice_product and other product tables
+SDS_ORDER,ALL,TMP,HIGH,"Enables all customer and Order level analysis on total revenue, shipments, AOV  ","AOV, Revenue, SPM,Shipments",,
+SDS_CUSTOMER_LEVEL,ALL,TMP,HIGH,,,,
+SDS_PLAN_LEVEL,ALL,TMP,HIGH,Enables insights to Customer Plan and additiona information about the Plan and plan origin,"New members, Active , Churn",,
+ps_change_plan_attribute_events,ALL,STG,HIGH,"changes to member plan attributes ( freq, bill dates etc..)",plan changes by members,,
+qualtrics_custom_segments,Marketing Analytics,TMP,Low,"Stores the customer segments like EBL, informed, value seekers etc..",customer segments,,
+funnel_urls,ALL,TMP,HIGH,stores all the funnel URL's,,funnel and funnel url's,
+stg.optimove_popups,Site Popup Impressions,STG,Medium,Popup Impression and timestamps by test/control and campaign name from optimove,popup impressions,"impression timestamp, campaign name, test assignment",joins on obfuscated customer ID
+stg.marketing_campaign_unsubscribes,CRM Analytics,STG,Medium,stores customer ids of marketing opt out,unsubscribes,,
+tmp.email_customer_journey_event,Customer Analytics,TMP,Medium,customer journey and events correlation,,customer_journey_event,days_before_next_bill_date
+tmp.aw_attainment_all_frequencies,Marketing Analytics,TMP,HIGH,Drives the LTV and PBP calcualtion based on Attainment curve built on POE and Frequency,LTV,"POE, Frequency","SDS_Order_Level
+"
+tmp.cogs_order_us,ALL,TMP,HIGH,product Cost and all other components of the COGS. Drives all GM LTV calculations,"COGS, Product Cost, shipping Cost etc..",Order ID,"SDS_Order_Level
+F_Invoice"
+tmp.order_box_configuration,ALL,TMP,High,Box configutaion by product and product category,Box Config by Orders,"Order ID, Customer ID","SDS_Order_Level
+F_Invoice
+SDS_Plan_Level"
+spectrum.hl_hl_ccpa_compliance,ALL,Spectrum,HIGH,"CCPA compliance. This table can be used for filtering out customers ,who have asked not be marketed ( do not sell information)",,Customer with CCPA Flag,Obfuscated_Customer_ID
+ga_visit_summary,Web Analytics,GA,HIGH,summary of web visits and associated visit metadata,,,"mcvisid, visit_id, customer_id"
+ga_src_prod,Web Analytics,GA,HIGH,raw data output from BQ,,,"mcvisid, visit_id, customer_id"
+ga_ab_test,Web Analytics,GA,HIGH,summary of visits/visitors by test assignment(s),,,"mcvisid, visit_id, customer_id"
+TMP.LTV_DECILE_ALL_MEMBERS_FULL,ALL,TMP,High,"LTV  tier at customer level w.r.t their respective cohorts (tenure) based on actual GM LTV ( cumulative).The table also has month orders, revenue, GM lTV by each member. ","
+Cuml Customer Gross Margin
+Cuml revenue","
+Decile Value Tier
+Tenure Months
+Business Model
+Funnel SKU List",Customer ID
