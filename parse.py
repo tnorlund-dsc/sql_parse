@@ -1,17 +1,25 @@
+#!/usr/bin/env python3
 import os
-import yaml
 import json
 import pandas as pd
 import sqlparse
-from pprint import pprint
 from sql_metadata import Parser
-from utils import table_name_cleaner
 
-# NOTE
-# - Each App uses a single app_config hardcoded to a specific directory
-# - Each app has a single 'group' of steps used in the ETL job
-# - A single job, dm-esp-extract, runs through the steps parallely
-# - 
+
+def table_name_cleaner( table_name: str ) -> str:
+    if ( table_name.startswith('dmt.') ):
+        return table_name.replace('dmt.', '')
+    if ( table_name.startswith('stg.') ):
+        return table_name.replace('stg.', '')
+    if ( table_name.startswith('map.') ):
+        return table_name.replace('map.', '')
+    if ( table_name.startswith('extract.') ):
+        return table_name.replace('extract.', '')
+    if ( table_name.startswith('tmp.') ):
+        return table_name.replace('tmp.', '')
+    if ( table_name.startswith('spectrum.') ):
+        return table_name.replace('spectrum.', '')
+    return table_name
 
 # Read the current tables used by the SA team
 column_names = [
@@ -37,59 +45,29 @@ table_df["Data Source"].str.strip()
 app_df = pd.read_csv(
     'UsedApps.csv'
 )
-
 # Get the 'apps' that are found in the S3 pull and in the current Confluence documentation
 PARSE_PATH = '/Users/tnorlund/etl_aws_copy/apps'
 apps = list(
     set( os.listdir( PARSE_PATH ) )& set( app_df['App Name'].to_list() )
 )
 
-# Find the '.sql' scripts each app uses
-sql_scripts = {}
-for app in apps:
-    if os.path.exists( os.path.join( PARSE_PATH, app + '/config' ) ):
-        sql_scripts[app] = []
-        app_config_files = [ 
-            file for file in os.listdir( os.path.join( PARSE_PATH, app + '/config' ) ) 
-            if file.endswith( '.yml') 
-        ]
-    else:
-        app_config_files = []
-    
-    if 'app_config.yml' in app_config_files:
-        # parse and read the yaml 'app_config' file
-        with open( os.path.join( PARSE_PATH, app + '/config/app_config.yml' ) ) as file:
-            # The FullLoader parameter handles the conversion from YAML
-            # scalar values to Python the dictionary format
-            app_config = yaml.load(file, Loader=yaml.FullLoader)
-        
-        scripts = [ 
-            'tgt_load_sql_script', 
-            'tgt_transform_sql_script', 
-            'src_extract_sql_script', 
-            'transform_sql_script' 
-        ]
-        # Iterate over the different steps for the one group per app
-        for step in app_config['groups'][0]['steps']:
-            # Each step uses certail '.sql' scripts to query against certain tables
-            scripts_used_in_step = [ script for script in scripts if script in step.keys() ]
-            for script in scripts_used_in_step:
-                if os.path.exists( os.path.join( PARSE_PATH, app + '/sql/' + step[ script ] ) ):
-                    sql_scripts[app].append(
-                        os.path.join( PARSE_PATH, app + '/sql/' + step[ script ] )
-                    )
-# Store the data obtained from parsing each app's '.sql' script
+parsed_statements = 0
+not_parsed_statements = 0
 data = {}
-# Parse the SQL queries to determine which tables are used.
+# Iterate over the different apps to find the different SQL queries per app
 for app in apps:
+    print( app )
     data[app] = {}
-    for sql_file in sql_scripts[app]:
+    if os.path.exists( os.path.join( PARSE_PATH, app + '/sql' ) ):
+        app_sql_files = os.listdir( os.path.join( PARSE_PATH, app + '/sql' ) )
+    else:
+        app_sql_files = []
+    for sql_file in [ file for file in app_sql_files if file.endswith( '.sql' ) ]:
         data[app][sql_file] = []
         # Read the SQL query contents in order to parse each statement
         sql_contents = open( 
             os.path.join( os.path.join( PARSE_PATH, app + '/sql' ), sql_file ) 
         ).read()
-        # Split the SQL query contents into the different queries made in the script
         for sql_statement in sqlparse.split( sql_contents ):
             parsed = sqlparse.parse( sql_statement )[0]
             sql_type = parsed.get_type()
@@ -107,10 +85,12 @@ for app in apps:
                         'value': parsed.value
                     } )
                 except:
+                    not_parsed_statements += 1
                     data[app][sql_file].append( {
                         'skipped': True,
                         'value': parsed.value
                     } )
+
 tables = {}
 for app in data.keys():
     tables[app] = []
@@ -127,7 +107,6 @@ out = {}
 tables_in_gsheet = [table_name.lower() for table_name in table_df['Table Name'].to_list()]
 # Iterate over the different Databrick Jobs
 for index, row in app_df.iterrows():
-    print( row['App Name'] )
     out[ row['App Name'] ] = {}
     out[ row['App Name'] ]['found'] = []
     out[ row['App Name'] ]['not found'] = []
@@ -158,5 +137,14 @@ for index, row in app_df.iterrows():
     for table in tables_not_found:
         print(f'\t[?] {table}')
         out[ row['App Name'] ]['unknown'].append( table )
+
+# out_df = pd.DataFrame( columns=['Source', 'Name', 'Found In Documentation'] )
+out_dict = {
+    'Source':[], 'Name':[], 'Found In Documentation':[]
+}
+for app in out.keys():
+    found_tables = out[app]
+    sources = [table.split('.')[0] for table in found_tables]
+
 with open('known_tables.json', 'w') as json_file:
   json.dump(out, json_file)

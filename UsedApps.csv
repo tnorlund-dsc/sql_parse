@@ -10,4 +10,4 @@ dm_daily_reports_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/89
 dm_optimove_import_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/2596,dm-optimove-import,https://github.com/dollarshaveclub/dm_optimove_import/tree/develop
 dm_optouts_prod_job,https://dbc-aafd93be-d844.cloud.databricks.com/#job/8393,dm-optouts,https://github.com/dollarshaveclub/dm_optouts/tree/develop
 dm-ga360-import_prod,https://dbc-aafd93be-d844.cloud.databricks.com/#job/13288,dm-ga,https://github.com/dollarshaveclub/dm_ga/tree/master
-dm-ga360-export_prod,https://dbc-aafd93be-d844.cloud.databricks.com/#job/13288,dm-ga,https://github.com/dollarshaveclub/dm_ga/tree/master
+dm-ga360-export_prod,https://dbc-aafd93be-d844.cloud.databricks.com/#job/13288,dm-ga360-export,https://github.com/dollarshaveclub/dm_ga360_export/tree/master																						
