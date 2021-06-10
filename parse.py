@@ -6,6 +6,26 @@ import sqlparse
 from sql_metadata import Parser
 
 
+these_tables = [
+    "dmt.ga_visit_summary",
+    "stg.ga_src_prod",
+    "dmt.ga_visit_level_getstartedcomplete_page_metadata",
+    "dmt.d_customer_plan_360",
+    "stg.ps_scheduled_carts",
+    "stg.ps_scheduled_cart_items",
+    "stg.mbo_order_base",
+    "dmt.f_invoice",
+    "dmt.f_invoice_product",
+    "stg.ps_close_scheduled_cart_items",
+    "stg.ps_change_scheduled_cart_item_events",
+    "stg.ps_change_plan_item_events",
+    "stg.ps_change_plan_attribute_events",
+    "stg.ps_plan_items",
+    "stg.ps_plans",
+    "dmt.d_bundle_discount",
+    "dmt.d_bundle_discounted_value"
+]
+
 def table_name_cleaner( table_name: str ) -> str:
     if ( table_name.startswith('dmt.') ):
         return table_name.replace('dmt.', '')
@@ -54,16 +74,19 @@ apps = list(
 parsed_statements = 0
 not_parsed_statements = 0
 data = {}
+table_data = {}
 # Iterate over the different apps to find the different SQL queries per app
 for app in apps:
     print( app )
     data[app] = {}
+    table_data[app] = {}
     if os.path.exists( os.path.join( PARSE_PATH, app + '/sql' ) ):
         app_sql_files = os.listdir( os.path.join( PARSE_PATH, app + '/sql' ) )
     else:
         app_sql_files = []
     for sql_file in [ file for file in app_sql_files if file.endswith( '.sql' ) ]:
         data[app][sql_file] = []
+        table_data[app][sql_file] = []
         # Read the SQL query contents in order to parse each statement
         sql_contents = open( 
             os.path.join( os.path.join( PARSE_PATH, app + '/sql' ), sql_file ) 
@@ -76,6 +99,9 @@ for app in apps:
             or sql_type == 'DELETE' or sql_type == 'INSERT':
                 try:
                     metadata = Parser( parsed.value )
+                    if sql_type == 'CREATE' or sql_type == 'INSERT' or sql_type == 'DELETE' and \
+                    len([table_name for table_name in metadata.tables if table_name in these_tables]) > 0:
+                        table_data[app][sql_file] = [table_name for table_name in metadata.tables if table_name in these_tables]
                     data[app][sql_file].append( {
                         'type':sql_type,
                         'columns':metadata.columns_dict,
@@ -91,6 +117,8 @@ for app in apps:
                         'value': parsed.value
                     } )
 
+with open('tables_for_kyle.json', 'w') as json_file:
+  json.dump(table_data, json_file)
 tables = {}
 for app in data.keys():
     tables[app] = []

@@ -64,10 +64,11 @@ for app in apps:
             app_config = yaml.load(file, Loader=yaml.FullLoader)
         
         scripts = [ 
-            'tgt_load_sql_script', 
-            'tgt_transform_sql_script', 
-            'src_extract_sql_script', 
-            'transform_sql_script' 
+            "tgt_load_sql"
+            # 'tgt_load_sql_script', 
+            # 'tgt_transform_sql_script', 
+            # 'src_extract_sql_script', 
+            # 'transform_sql_script' 
         ]
         # Iterate over the different steps for the one group per app
         for step in app_config['groups'][0]['steps']:
@@ -78,6 +79,7 @@ for app in apps:
                     sql_scripts[app].append(
                         os.path.join( PARSE_PATH, app + '/sql/' + step[ script ] )
                     )
+print( sql_scripts )
 # Store the data obtained from parsing each app's '.sql' script
 data = {}
 # Parse the SQL queries to determine which tables are used.
