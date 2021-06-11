@@ -71,7 +71,7 @@ def extract_join_part(token):
                     alias: {
                         'join_type':join_type, 
                         'table_name':table_name, 
-                        'redshift_schema':redshift_schema,
+                        'schema':redshift_schema,
                         'token': _token
                     }
                 }
@@ -165,7 +165,7 @@ for sql_statement in sqlparse.split( sql_contents ):
     if isinstance(parsed.tokens[0], Token) \
     and parsed.tokens[0].value.upper() == 'CREATE':
         # Get the name of the table being created
-        table_name = next(token for token in parsed.tokens if isinstance(token, Identifier))
+        table_name = next(token.value for token in parsed.tokens if isinstance(token, Identifier))
         # Get all the FROM statements's metadata
         froms = {k: v for d in extract_from_part(parsed) for k, v in d.items()}
         # Get all the JOIN statements's metadata
@@ -197,16 +197,38 @@ for sql_statement in sqlparse.split( sql_contents ):
                     k: v for d in joins for k, v in d.items()
                 }
             }[comparison_right_alias]
-            pprint(left)
-            print(comparison_left_column)
-            pprint(right)
-            print(comparison_right_column)
-            print()
+            if 'join_type' in left:
+                out[table_name]['joins'].append({
+                    'join_type': left['join_type'],
+                    'left':{
+                        'schema': left['schema'],
+                        'table_name': left['table_name'],
+                        'column_name': comparison_left_column
+                    },
+                    'right':{
+                        'schema': right['schema'],
+                        'table_name': right['table_name'],
+                        'column_name': comparison_right_column
+                    },
+                })
+            elif 'join_type' in right:
+                out[table_name]['joins'].append({
+                    'join_type': right['join_type'],
+                    'left':{
+                        'schema': left['schema'],
+                        'table_name': left['table_name'],
+                        'column_name': comparison_left_column
+                    },
+                    'right':{
+                        'schema': right['schema'],
+                        'table_name': right['table_name'],
+                        'column_name': comparison_right_column
+                    },
+                })
+            else:
+                raise Exception('Could not parse Join')
 
-            
-
-
-    # print_to_console(parsed)
+        pprint(out)
 
 
     
