@@ -5,9 +5,41 @@
 import re
 from pprint import pprint
 from collections import ChainMap
+from numpy import select
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML
+from sql_metadata import Parser
+
+# TODO parse columns without using sql_metadata
+def extract_selects(token):
+    try:
+        # print(f'token.value:\n{token.value}')
+        match = re.findall(
+            r'select([\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]+)from', 
+            token.value, 
+            re.IGNORECASE|re.MULTILINE
+        )
+        if len(match) > 0:
+            selections = match[0].split(',')
+            for selection in selections:
+                print(selection)
+        else:
+            print('could not match regular expression')
+        metadata = Parser(token.value)
+        select_columns = metadata.columns_dict['select']
+        select_aliases = metadata.columns_aliases_dict['select']
+        if len(select_aliases) != len(select_columns):
+            raise Exception('Could not find column aliases')
+        for index in range(len(select_columns)):
+            yield {
+                'schema': select_columns[index].split('.')[0],
+                'table': select_columns[index].split('.')[1],
+                'column': select_columns[index].split('.')[2],
+                'alias': select_aliases[index]
+            }
+    except Exception as e:
+        print(f'could not parse metadata:\n{e}')
 
 def is_subselect(token):
     """Returns whether the token has a ``SELECT`` statement in it"""
@@ -101,13 +133,23 @@ def print_to_console(token):
         if x.is_whitespace:
             continue
         print('----')
-        print(dir(x))
         print(x)
+        print(type(x))
 
 def extract_comparisons(token):
     for x in token.tokens:
         if isinstance(x, Comparison):
-            yield(x.left.value, x.right.value)
+            match = re.match(
+                r'([a-zA-Z_]+)\.([a-zA-Z_]+)\s+=\s+([a-zA-Z_]+)\.([a-zA-Z_]+)', 
+                x.value
+            )
+            if match:   
+                yield (
+                    match.groups()[0] + '.' + match.groups()[1], 
+                    match.groups()[2] + '.' + match.groups()[3]
+                )
+            else:
+                raise Exception(f'Could not find comparisons:\n{x.value}')
 
 def table_identifiers_to_dict(token_stream):
     """Creates a dictionary of the aliased names as keys and real names as values"""
@@ -144,26 +186,16 @@ def table_identifiers_to_dict(token_stream):
 
 file_path = "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
 sql_contents = open(file_path).read()
-sql_contents = """CREATE TEMP TABLE dm_delta AS
-select distinct i.customer_id as customer_id
-from stg.erp_invoices i
-  inner join stg.orders o
-    on i.order_id = o.id
-  left outer join stg.erp_shipments s
-    on i.order_id = s.order_id
-where (
-         i.dsc_processed_at >= '<start_date>'::timestamp  -  interval '1 day'
-         OR o.updated_at >= '<start_date>'::timestamp -  interval '1 day'
-         OR s.dsc_processed_at >= '<start_date>'::timestamp -  interval '1 day'
-       )
-;"""
 
 
-for sql_statement in sqlparse.split( sql_contents ):
+for sql_statement in sqlparse.split( sql_contents )[3:]:
     # Tokenize the SQL statement
     parsed = sqlparse.parse( sql_statement )[0]
     if isinstance(parsed.tokens[0], Token) \
-    and parsed.tokens[0].value.upper() == 'CREATE':
+    and (
+        parsed.tokens[0].value.upper() == 'CREATE'
+        or parsed.tokens[0].value.upper() == 'INSERT'
+    ):
         # Get the name of the table being created
         table_name = next(token.value for token in parsed.tokens if isinstance(token, Identifier))
         # Get all the FROM statements's metadata
@@ -173,9 +205,11 @@ for sql_statement in sqlparse.split( sql_contents ):
         # Get all of the comparisons to compare the number of comparisons to the number of JOIN statements
         comparisons = list(extract_comparisons(parsed))
         # When the number of comparisons does not match the number of joins, the parsing was incorrect, raise and exception.
+        selects = list(extract_selects(parsed))
+        print(f'selects:\n{selects}')
         if len(comparisons) != len(joins):
             raise Exception('Parsing messed up!')
-        out = {table_name:{'joins':[]}}
+        out = {table_name:{'joins':[], 'selects':selects}}
         # Set the join metadata 
         for index in range(len(joins)):
             join = joins[index]
@@ -228,7 +262,7 @@ for sql_statement in sqlparse.split( sql_contents ):
             else:
                 raise Exception('Could not parse Join')
 
-        pprint(out)
+        # pprint(out)
 
 
     
