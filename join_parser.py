@@ -3,6 +3,7 @@
 # Blatantly stolen from:
 # https://www.programmersought.com/article/85254754672/
 import re
+import json
 from pprint import pprint
 from collections import ChainMap
 from numpy import select
@@ -12,34 +13,94 @@ from sqlparse.tokens import Keyword, DML
 from sql_metadata import Parser
 
 # TODO parse columns without using sql_metadata
-def extract_selects(token):
-    try:
-        # print(f'token.value:\n{token.value}')
-        match = re.findall(
-            r'select([\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]+)from', 
-            token.value, 
-            re.IGNORECASE|re.MULTILINE
-        )
-        if len(match) > 0:
-            selections = match[0].split(',')
-            for selection in selections:
-                print(selection)
-        else:
-            print('could not match regular expression')
-        metadata = Parser(token.value)
-        select_columns = metadata.columns_dict['select']
-        select_aliases = metadata.columns_aliases_dict['select']
-        if len(select_aliases) != len(select_columns):
-            raise Exception('Could not find column aliases')
-        for index in range(len(select_columns)):
-            yield {
-                'schema': select_columns[index].split('.')[0],
-                'table': select_columns[index].split('.')[1],
-                'column': select_columns[index].split('.')[2],
-                'alias': select_aliases[index]
-            }
-    except Exception as e:
-        print(f'could not parse metadata:\n{e}')
+def extract_selects(token, aliases):
+    match = re.search(        
+        r'select([\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]+)from', 
+        token.value, 
+        re.IGNORECASE|re.MULTILINE
+    )
+    if match:
+        # Remove comments by seperating the selection by lines and removing the ``--+`` from each
+        # line. The lines can then be joined together to create the original selection without
+        # the comments.
+        select_lines = match.groups()[0].split('\n')
+        selection = '\n'.join([
+            re.sub(r'\-\-[\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]*$', '', select_line) 
+            for select_line in select_lines
+        ])
+        selects = selection.split(',')
+        select_index = 0
+        selects_out = []
+        while select_index < len(selects):
+            select_statement = selects[select_index]
+            if select_statement.count('(') != select_statement.count(')'):
+                while select_statement.count('(') != select_statement.count(')'):
+                    select_index += 1
+                    select_statement += "," + selects[select_index]
+                selects_out.append(select_statement.strip())
+                select_index += 1
+            else:
+                selects_out.append(select_statement.strip())
+                select_index += 1
+        # Iterate over the different select statements to find how the column is used
+        for select_statement in selects_out:
+            same_name_match = re.match(r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)$', select_statement)
+            rename_match_with_as = re.match(
+                r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement
+            )
+            rename_match_without_as = re.match(
+                r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)$', select_statement
+            )
+            function_match = re.search(r'([\w\W]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement, re.MULTILINE)
+            if same_name_match:
+                table_alias = same_name_match.groups()[0]
+                column_name = same_name_match.groups()[1]
+                yield {
+                    'schema': aliases[table_alias]['schema'],
+                    'table_name': aliases[table_alias]['table_name'],
+                    'column_name': column_name,
+                    'column_from': column_name,
+                    'table_alias': table_alias
+                }
+            elif rename_match_with_as or rename_match_without_as:
+                if rename_match_without_as:
+                    table_alias = rename_match_without_as.groups()[0]
+                    column_from = rename_match_without_as.groups()[1]
+                    column_name = rename_match_without_as.groups()[2]
+                    yield {
+                        'schema': aliases[table_alias]['schema'],
+                        'table_name': aliases[table_alias]['table_name'],
+                        'column_name': column_name,
+                        'column_from': column_from,
+                        'table_alias': table_alias
+                    }
+                else:
+                    table_alias = rename_match_with_as.groups()[0]
+                    column_from = rename_match_with_as.groups()[1]
+                    column_name = rename_match_with_as.groups()[2]
+                    yield {
+                        'schema': aliases[table_alias]['schema'],
+                        'table_name': aliases[table_alias]['table_name'],
+                        'column_name': column_name,
+                        'column_from': column_from,
+                        'table_alias': table_alias
+                    }
+            elif function_match:
+                operation = function_match.groups()[0]
+                column_name = function_match.groups()[1]
+                yield {
+                    'operation': operation,
+                    'column_name': column_name
+                }
+            else:
+                operation = ' '.join(select_statement.split(' ')[:-1])
+                column_name = select_statement.split(' ')[-1]
+                yield {
+                    'operation': operation,
+                    'column_name': column_name
+                }
+    else:
+        raise Exception('Could not parse columns from select statement')
 
 def is_subselect(token):
     """Returns whether the token has a ``SELECT`` statement in it"""
@@ -204,9 +265,12 @@ for sql_statement in sqlparse.split( sql_contents )[3:]:
         joins = list(extract_join_part(parsed))
         # Get all of the comparisons to compare the number of comparisons to the number of JOIN statements
         comparisons = list(extract_comparisons(parsed))
+        # Get all the columns selected by this query. The table aliases are used to identify where
+        # the columns originate from.
+        selects = list(
+            extract_selects(parsed, {**froms, **{k: v for d in joins for k, v in d.items()}})
+        )
         # When the number of comparisons does not match the number of joins, the parsing was incorrect, raise and exception.
-        selects = list(extract_selects(parsed))
-        print(f'selects:\n{selects}')
         if len(comparisons) != len(joins):
             raise Exception('Parsing messed up!')
         out = {table_name:{'joins':[], 'selects':selects}}
@@ -262,7 +326,5 @@ for sql_statement in sqlparse.split( sql_contents )[3:]:
             else:
                 raise Exception('Could not parse Join')
 
-        # pprint(out)
-
-
-    
+        with open('join_parse.json', 'w') as json_file:
+            json.dump(out, json_file)
