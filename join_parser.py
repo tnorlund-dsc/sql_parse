@@ -168,6 +168,13 @@ def extract_join_part(token):
             if _token.ttype is Keyword:
                 join_type = None
                 continue
+            # Match the value found to see if there is a JOIN using a subquery
+            subquery_match = re.match(
+                r"\(([\w\W]+)\)", _token.value[:-len(_token.get_name())], re.MULTILINE
+            )
+            if subquery_match:
+                # TODO recurse this to parse subquery
+                print(subquery_match.groups())
             # The alias used to reference the table in the query
             alias = _token.get_name()
             # The full table name without the schema
@@ -228,9 +235,65 @@ def extract_comparisons(token):
             else:
                 raise Exception(f'Could not find comparisons:\n{token.value}')
 
+def encode_table(joins, froms, table_name, selects, out):
+    """Encodes the joins, froms, and """
+    out[table_name] = {'joins':[], 'selects':selects}
+    # Set the join meta-data
+    for index, _ in enumerate(joins):
+        comparison_left = comparisons[index][0]
+        comparison_right = comparisons[index][1]
+        comparison_left_alias = comparison_left.split('.')[0]
+        comparison_left_column = comparison_left.split('.')[1]
+        comparison_right_alias = comparison_right.split('.')[0]
+        comparison_right_column = comparison_right.split('.')[1]
+        left = {
+            **froms,
+            **{
+                k: v for d in joins for k, v in d.items()
+            }
+        }[comparison_left_alias]
+        right = {
+            **froms,
+            **{
+                k: v for d in joins for k, v in d.items()
+            }
+        }[comparison_right_alias]
+        if 'join_type' in left:
+            out[table_name]['joins'].append({
+                'join_type': left['join_type'],
+                'left':{
+                    'schema': left['schema'],
+                    'table_name': left['table_name'],
+                    'column_name': comparison_left_column
+                },
+                'right':{
+                    'schema': right['schema'],
+                    'table_name': right['table_name'],
+                    'column_name': comparison_right_column
+                },
+            })
+        elif 'join_type' in right:
+            out[table_name]['joins'].append({
+                'join_type': right['join_type'],
+                'left':{
+                    'schema': left['schema'],
+                    'table_name': left['table_name'],
+                    'column_name': comparison_left_column
+                },
+                'right':{
+                    'schema': right['schema'],
+                    'table_name': right['table_name'],
+                    'column_name': comparison_right_column
+                },
+            })
+        else:
+            raise Exception('Could not parse Join')
+    return out
+
 sql_contents = open(
     "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
 ).read()
+out = {}
 
 
 for sql_statement in sqlparse.split( sql_contents )[3:]:
@@ -259,57 +322,7 @@ for sql_statement in sqlparse.split( sql_contents )[3:]:
         # incorrect, raise and exception.
         if len(comparisons) != len(joins):
             raise Exception('Parsing messed up!')
-        out = {table_name:{'joins':[], 'selects':selects}}
-        # Set the join meta-data
-        for index, join in enumerate(joins):
-            comparison_left = comparisons[index][0]
-            comparison_right = comparisons[index][1]
-            comparison_left_alias = comparison_left.split('.')[0]
-            comparison_left_column = comparison_left.split('.')[1]
-            comparison_right_alias = comparison_right.split('.')[0]
-            comparison_right_column = comparison_right.split('.')[1]
-            left = {
-                **froms,
-                **{
-                    k: v for d in joins for k, v in d.items()
-                }
-            }[comparison_left_alias]
-            right = {
-                **froms,
-                **{
-                    k: v for d in joins for k, v in d.items()
-                }
-            }[comparison_right_alias]
-            if 'join_type' in left:
-                out[table_name]['joins'].append({
-                    'join_type': left['join_type'],
-                    'left':{
-                        'schema': left['schema'],
-                        'table_name': left['table_name'],
-                        'column_name': comparison_left_column
-                    },
-                    'right':{
-                        'schema': right['schema'],
-                        'table_name': right['table_name'],
-                        'column_name': comparison_right_column
-                    },
-                })
-            elif 'join_type' in right:
-                out[table_name]['joins'].append({
-                    'join_type': right['join_type'],
-                    'left':{
-                        'schema': left['schema'],
-                        'table_name': left['table_name'],
-                        'column_name': comparison_left_column
-                    },
-                    'right':{
-                        'schema': right['schema'],
-                        'table_name': right['table_name'],
-                        'column_name': comparison_right_column
-                    },
-                })
-            else:
-                raise Exception('Could not parse Join')
+        out = encode_table(joins, froms, table_name, selects, out)
 
-        with open('join_parse.json', 'w') as json_file:
-            json.dump(out, json_file)
+with open('join_parse.json', 'w') as json_file:
+    json.dump(out, json_file)
