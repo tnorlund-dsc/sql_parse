@@ -1,22 +1,22 @@
-#!/usr/bin/env python3
-
-# Blatantly stolen from:
-# https://www.programmersought.com/article/85254754672/
+"""Parses a '.sql' file for a set of joins and selects per statement.
+"""
 import re
 import json
-from pprint import pprint
-from collections import ChainMap
-from numpy import select
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML
-from sql_metadata import Parser
 
-# TODO parse columns without using sql_metadata
 def extract_selects(token, aliases):
-    match = re.search(        
-        r'select([\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]+)from', 
-        token.value, 
+    """Gets all the columns selected in a ``SELECT ... FROM`` SQL statement.
+
+    Parameters
+    ----------
+    token: str
+    aliases: dict
+    """
+    match = re.search(
+        r'select([\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]+)from',
+        token.value,
         re.IGNORECASE|re.MULTILINE
     )
     if match:
@@ -25,33 +25,47 @@ def extract_selects(token, aliases):
         # the comments.
         select_lines = match.groups()[0].split('\n')
         selection = '\n'.join([
-            re.sub(r'\-\-[\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]*$', '', select_line) 
+            re.sub(r'\-\-[\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]*$', '', select_line)
             for select_line in select_lines
         ])
-        selects = selection.split(',')
+        selected_columns = selection.split(',')
         select_index = 0
         selects_out = []
-        while select_index < len(selects):
-            select_statement = selects[select_index]
+        while select_index < len(selected_columns):
+            select_statement = selected_columns[select_index].strip()
             if select_statement.count('(') != select_statement.count(')'):
                 while select_statement.count('(') != select_statement.count(')'):
                     select_index += 1
-                    select_statement += "," + selects[select_index]
-                selects_out.append(select_statement.strip())
+                    select_statement += ", " + selected_columns[select_index].strip()
+                selects_out.append(select_statement)
                 select_index += 1
             else:
-                selects_out.append(select_statement.strip())
+                selects_out.append(
+                    ' '.join([line.strip() for line in select_statement.split('\n')])
+                )
                 select_index += 1
         # Iterate over the different select statements to find how the column is used
         for select_statement in selects_out:
+            # Find the select statements that have just the schema and the column name from the
+            # origin table.
             same_name_match = re.match(r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)$', select_statement)
+            # Find the select statements with the schema, the column name, and this column's
+            # aliased name with the keyword ``as```.
             rename_match_with_as = re.match(
-                r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement
+                r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+as\s+([a-zA-Z0-9_]+)$',
+                select_statement,
+                re.IGNORECASE
             )
+            # Find the select statements with the schema, the column name, and this column's
+            # aliased name without the ``as`` keyword.
             rename_match_without_as = re.match(
                 r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)$', select_statement
             )
-            function_match = re.search(r'([\w\W]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement, re.MULTILINE)
+            # Find the functions applied to the column, aliased with another column name with the
+            # keyword ``as``.
+            function_match = re.search(
+                r'([\w\W]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement, re.MULTILINE|re.IGNORECASE
+            )
             if same_name_match:
                 table_alias = same_name_match.groups()[0]
                 column_name = same_name_match.groups()[1]
@@ -129,12 +143,12 @@ def extract_from_part(token):
                 # The alias used to reference the table in the query
                 alias = _token.get_name()
                 # The full table name without the schema
-                table_name = _token.get_real_name()
+                table_real_name = _token.get_real_name()
                 # The Redshift schema where the table is accessed from
-                schema = _token.value.replace(f".{table_name}", '').split(' ')[0]
+                schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
                 yield {
                     alias:{
-                        'table_name': table_name,
+                        'table_name': table_real_name,
                         'schema': schema,
                         'token': _token
                     }
@@ -150,30 +164,30 @@ def extract_join_part(token):
         if _token.is_whitespace:
             continue
         if join_type:
+            # Continue over this iteration if the token is a SQL keyword.
             if _token.ttype is Keyword:
                 join_type = None
                 continue
-            else:
-                # The alias used to reference the table in the query
-                alias = _token.get_name()
-                # The full table name without the schema
-                table_name = _token.get_real_name()
-                # The Redshift schema where the table is accessed from
-                redshift_schema = _token.value.replace(f".{table_name}", '').split(' ')[0]
-                yield {
-                    alias: {
-                        'join_type':join_type, 
-                        'table_name':table_name, 
-                        'schema':redshift_schema,
-                        'token': _token
-                    }
+            # The alias used to reference the table in the query
+            alias = _token.get_name()
+            # The full table name without the schema
+            table_real_name = _token.get_real_name()
+            # The Redshift schema where the table is accessed from
+            redshift_schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
+            yield {
+                alias: {
+                    'join_type':join_type,
+                    'table_name':table_real_name,
+                    'schema':redshift_schema,
+                    'token': _token
                 }
+            }
         if _token.ttype is Keyword and _token.value.upper() in (
-            'LEFT JOIN', 
-            'RIGHT JOIN', 
-            'INNER JOIN', 
-            'FULL JOIN', 
-            'LEFT OUTER JOIN', 
+            'LEFT JOIN',
+            'RIGHT JOIN',
+            'INNER JOIN',
+            'FULL JOIN',
+            'LEFT OUTER JOIN',
             'FULL OUTER JOIN'
         ):
             join_type = _token.value.upper()
@@ -190,63 +204,33 @@ def extract_table_identifiers(token_stream):
             yield item.value
 
 def print_to_console(token):
-    for x in list(token):
-        if x.is_whitespace:
+    """Prints tokens and types to console"""
+    for token in list(token):
+        if token.is_whitespace:
             continue
         print('----')
-        print(x)
-        print(type(x))
+        print(token)
+        print(type(token))
 
 def extract_comparisons(token):
-    for x in token.tokens:
-        if isinstance(x, Comparison):
+    """Gets all comparisons from a parsed SQL statement"""
+    for token in token.tokens:
+        if isinstance(token, Comparison):
             match = re.match(
-                r'([a-zA-Z_]+)\.([a-zA-Z_]+)\s+=\s+([a-zA-Z_]+)\.([a-zA-Z_]+)', 
-                x.value
+                r'([a-zA-Z_]+)\.([a-zA-Z_]+)\s+=\s+([a-zA-Z_]+)\.([a-zA-Z_]+)',
+                token.value
             )
-            if match:   
+            if match:
                 yield (
-                    match.groups()[0] + '.' + match.groups()[1], 
+                    match.groups()[0] + '.' + match.groups()[1],
                     match.groups()[2] + '.' + match.groups()[3]
                 )
             else:
-                raise Exception(f'Could not find comparisons:\n{x.value}')
+                raise Exception(f'Could not find comparisons:\n{token.value}')
 
-def table_identifiers_to_dict(token_stream):
-    """Creates a dictionary of the aliased names as keys and real names as values"""
-    out = {}
-    for item in token_stream:
-        if isinstance(item, IdentifierList):
-            for identifier in item.get_identifiers():
-                out[identifier.get_name()] = identifier.get_real_name()
-        elif isinstance(item, Identifier):
-            # There is a chance of a subquery when the aliased name and the real name are the same.
-            if item.get_name() == item.get_real_name():
-                match = re.match(r'\(([\W\w]+)\)\s+' + item.get_name(),  item.value)
-                # Use a regular expression to find the subquery and recursively call all the steps.
-                if match:
-                    print('+++++++++++++')
-                    # print(match.groups()[0])
-                    parsed = sqlparse.parse(match.groups()[0])[0]
-                    print('comparisons', list(extract_comparisons(parsed)))
-                    # print('comparisons length', len(list(extract_comparisons(parsed))))
-                    # print('from length', len(list(extract_from_part(parsed))))
-                    print('from', table_identifiers_to_dict(extract_from_part(parsed)))
-                    print('join', table_identifiers_to_dict(extract_join_part(parsed)))
-                else:
-                    table_match = re.match(r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)', item.value)
-                    if table_match:
-                        print(table_match.groups())
-                    else:
-                        raise Exception('Could not find subquery')
-            out[item.get_name()] = item.get_real_name()
-        elif item.ttype is Keyword:
-            out[item.get_name()] = item.get_real_name()
-    return out
-
-
-file_path = "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
-sql_contents = open(file_path).read()
+sql_contents = open(
+    "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
+).read()
 
 
 for sql_statement in sqlparse.split( sql_contents )[3:]:
@@ -263,20 +247,21 @@ for sql_statement in sqlparse.split( sql_contents )[3:]:
         froms = {k: v for d in extract_from_part(parsed) for k, v in d.items()}
         # Get all the JOIN statements's metadata
         joins = list(extract_join_part(parsed))
-        # Get all of the comparisons to compare the number of comparisons to the number of JOIN statements
+        # Get all of the comparisons to compare the number of comparisons to the number of JOIN
+        # statements
         comparisons = list(extract_comparisons(parsed))
         # Get all the columns selected by this query. The table aliases are used to identify where
         # the columns originate from.
         selects = list(
             extract_selects(parsed, {**froms, **{k: v for d in joins for k, v in d.items()}})
         )
-        # When the number of comparisons does not match the number of joins, the parsing was incorrect, raise and exception.
+        # When the number of comparisons does not match the number of joins, the parsing was
+        # incorrect, raise and exception.
         if len(comparisons) != len(joins):
             raise Exception('Parsing messed up!')
         out = {table_name:{'joins':[], 'selects':selects}}
-        # Set the join metadata 
-        for index in range(len(joins)):
-            join = joins[index]
+        # Set the join meta-data
+        for index, join in enumerate(joins):
             comparison_left = comparisons[index][0]
             comparison_right = comparisons[index][1]
             comparison_left_alias = comparison_left.split('.')[0]
@@ -284,13 +269,13 @@ for sql_statement in sqlparse.split( sql_contents )[3:]:
             comparison_right_alias = comparison_right.split('.')[0]
             comparison_right_column = comparison_right.split('.')[1]
             left = {
-                **froms, 
+                **froms,
                 **{
                     k: v for d in joins for k, v in d.items()
                 }
             }[comparison_left_alias]
             right = {
-                **froms, 
+                **froms,
                 **{
                     k: v for d in joins for k, v in d.items()
                 }
