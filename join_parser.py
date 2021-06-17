@@ -78,7 +78,6 @@ def extract_selects(token, aliases):
         function_match = re.search(
             r'([\w\W]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement, re.MULTILINE|re.IGNORECASE
         )
-        # print(aliases)
         if same_name_match:
             table_alias = same_name_match.groups()[0]
             column_name = same_name_match.groups()[1]
@@ -87,13 +86,7 @@ def extract_selects(token, aliases):
                 yield {
                     'column_name': column_name,
                     'table_alias': table_alias,
-                    'subquery': aliases[table_alias]['subquery']
-                }
-            # Yield the column name and the alias's name when referencing a subquery.
-            elif aliases[table_alias]['schema'][0] == '(':
-                yield {
-                    'column_name': column_name,
-                    'table_alias': table_alias
+                    'subquery': list(aliases[table_alias]['subquery'].values())[0]
                 }
             else:
                 yield {
@@ -131,13 +124,7 @@ def extract_selects(token, aliases):
                     yield {
                         'column_name': column_name,
                         'table_alias': table_alias,
-                        'subquery': aliases[table_alias]['subquery']
-                    }
-                # Yield the column name and the alias's name when referencing a subquery.
-                elif aliases[table_alias]['schema'][0] == '(':
-                    yield {
-                        'column_name': column_name,
-                        'table_alias': table_alias
+                        'subquery': list(aliases[table_alias]['subquery'].values())[0]
                     }
                 else:
                     yield {
@@ -188,9 +175,8 @@ def extract_from_part(token):
             else:
                 # The alias used to reference the table in the query
                 alias = _token.get_name()
+                # When the alias is found as `None`, there is no ``FROM`` found in this query.
                 if alias is None:
-                    # print('ALIAS IS NONE')
-                    # print(_token)
                     return
                 # The full table name without the schema
                 table_real_name = _token.get_real_name()
@@ -205,12 +191,6 @@ def extract_from_part(token):
                         )[0],
                         {}
                     )
-                    # print('------')
-                    # print('FROM')
-                    # print(_token.get_name())
-                    # print(_token.value)
-                    # print(list(sub_query.values())[0])
-
                     # When there are more than 1 values found in this recursive step, the parsing
                     # failed.
                     if len(sub_query.values()) > 1:
@@ -259,7 +239,6 @@ def extract_join_part(token):
                 alias = _token.get_name()
                 # The full table name without the schema
                 table_real_name = _token.get_real_name()
-
                 yield {
                     alias: {
                         'join_type': join_type,
@@ -352,7 +331,6 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                 k: v for d in joins for k, v in d.items()
             }
         }[comparison_right_alias]
-        # TODO Change encoding to consider subqueries
         # Add the subquery to the output when there is one.
         if 'subquery' in right.keys() or 'subquery' in left.keys():
             if 'subquery' in right.keys():
@@ -365,7 +343,7 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                             'column_name': comparison_left_column
                         },
                         'right':{
-                            'subquery': right['subquery'],
+                            'subquery': list(right['subquery'].values())[0],
                             'table_name': right['table_name']
                         }
                     })
@@ -378,7 +356,7 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                             'column_name': comparison_left_column
                         },
                         'right':{
-                            'subquery': right['subquery'],
+                            'subquery': list(right['subquery'].values())[0],
                             'table_name': right['table_name']
                         }
                     })
@@ -389,7 +367,7 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                     output[table_name]['joins'].append({
                         'join_type': left['join_type'],
                         'left':{
-                            'subquery': left['subquery'],
+                            'subquery': list(left['subquery'].values)[0],
                             'table_name': left['table_name']
                         },
                         'right':{
@@ -402,7 +380,7 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                     output[table_name]['joins'].append({
                         'join_type': right['join_type'],
                         'left':{
-                            'subquery': left['subquery'],
+                            'subquery': list(left['subquery'].values())[0],
                             'table_name': left['table_name']
                         },
                         'right':{
@@ -430,8 +408,6 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                 },
             })
         elif 'join_type' in right:
-            if not 'schema' in right:
-                print(right)
             output[table_name]['joins'].append({
                 'join_type': right['join_type'],
                 'left':{
@@ -472,7 +448,7 @@ def parse_statement(parsed, output):
     return encode_table(joins, froms, table_name, selects, comparisons, output)
 
 sql_contents = open(
-    "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
+    "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/ddl/stg/stg.erp_invoices.ddl.sql"
 ).read()
 out = {}
 
@@ -486,5 +462,5 @@ for sql_statement in sqlparse.split(sql_contents):
     ):
         out = parse_statement(parsed_sql, out)
 
-with open('join_parse.json', 'w') as json_file:
+with open('erp_invoices.json', 'w') as json_file:
     json.dump(out, json_file)
