@@ -2,7 +2,6 @@
 """
 import re
 import json
-from pprint import pprint
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML
@@ -79,39 +78,75 @@ def extract_selects(token, aliases):
         function_match = re.search(
             r'([\w\W]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement, re.MULTILINE|re.IGNORECASE
         )
+        # print(aliases)
         if same_name_match:
             table_alias = same_name_match.groups()[0]
             column_name = same_name_match.groups()[1]
-            yield {
-                'schema': aliases[table_alias]['schema'],
-                'table_name': aliases[table_alias]['table_name'],
-                'column_name': column_name,
-                'column_from': column_name,
-                'table_alias': table_alias
-            }
+            # Yield the subquery and the column name when referencing a subquery
+            if 'subquery' in aliases[table_alias].keys():
+                yield {
+                    'column_name': column_name,
+                    'table_alias': table_alias,
+                    'subquery': aliases[table_alias]['subquery']
+                }
+            # Yield the column name and the alias's name when referencing a subquery.
+            elif aliases[table_alias]['schema'][0] == '(':
+                yield {
+                    'column_name': column_name,
+                    'table_alias': table_alias
+                }
+            else:
+                yield {
+                    'schema': aliases[table_alias]['schema'],
+                    'table_name': aliases[table_alias]['table_name'],
+                    'column_name': column_name,
+                    'column_from': column_name,
+                    'table_alias': table_alias
+                }
         elif rename_match_with_as or rename_match_without_as:
             if rename_match_without_as:
                 table_alias = rename_match_without_as.groups()[0]
                 column_from = rename_match_without_as.groups()[1]
                 column_name = rename_match_without_as.groups()[2]
-                yield {
-                    'schema': aliases[table_alias]['schema'],
-                    'table_name': aliases[table_alias]['table_name'],
-                    'column_name': column_name,
-                    'column_from': column_from,
-                    'table_alias': table_alias
-                }
+                # Yield the column name and the alias's name when referencing a subquery.
+                if aliases[table_alias]['schema'][0] == '(':
+                    yield {
+                        'column_name': column_name,
+                        'table_alias': table_alias
+                    }
+                else:
+                    yield {
+                        'schema': aliases[table_alias]['schema'],
+                        'table_name': aliases[table_alias]['table_name'],
+                        'column_name': column_name,
+                        'column_from': column_from,
+                        'table_alias': table_alias
+                    }
             else:
                 table_alias = rename_match_with_as.groups()[0]
                 column_from = rename_match_with_as.groups()[1]
                 column_name = rename_match_with_as.groups()[2]
-                yield {
-                    'schema': aliases[table_alias]['schema'],
-                    'table_name': aliases[table_alias]['table_name'],
-                    'column_name': column_name,
-                    'column_from': column_from,
-                    'table_alias': table_alias
-                }
+                # Yield the subquery and the column name when referencing a subquery
+                if 'subquery' in aliases[table_alias].keys():
+                    yield {
+                        'column_name': column_name,
+                        'table_alias': table_alias,
+                        'subquery': aliases[table_alias]['subquery']
+                    }
+                # Yield the column name and the alias's name when referencing a subquery.
+                elif aliases[table_alias]['schema'][0] == '(':
+                    yield {
+                        'column_name': column_name,
+                        'table_alias': table_alias
+                    }
+                else:
+                    yield {
+                        'schema': aliases[table_alias]['schema'],
+                        'table_name': aliases[table_alias]['table_name'],
+                        'column_name': column_name,
+                        'column_from': column_from,
+                        'table_alias': table_alias
+                    }
         elif function_match:
             operation = function_match.groups()[0]
             column_name = function_match.groups()[1]
@@ -170,30 +205,32 @@ def extract_from_part(token):
                         )[0],
                         {}
                     )
-                    print('------')
-                    print('FROM')
-                    print(_token.value)
-                    print(list(sub_query.values())[0])
+                    # print('------')
+                    # print('FROM')
+                    # print(_token.get_name())
+                    # print(_token.value)
+                    # print(list(sub_query.values())[0])
 
                     # When there are more than 1 values found in this recursive step, the parsing
                     # failed.
                     if len(sub_query.values()) > 1:
                         raise Exception(f'Error parsing subquery:\n{_token.value}')
+                    # print('yielding subquery')
                     yield {
-                        alias:{
-                            'subquery': list(sub_query.values())[0],
+                        _token.get_name():{
+                            'subquery':  list(sub_query.values())[0],
                             'token': _token
                         }
                     }
                 # Otherwise, the FROM portion of this statement is referencing another table.
-                # else:
-                yield {
-                    alias:{
-                        'table_name': table_real_name,
-                        'schema': schema,
-                        'token': _token
+                else:
+                    yield {
+                        alias:{
+                            'table_name': table_real_name,
+                            'schema': schema,
+                            'token': _token
+                        }
                     }
-                }
         if _token.ttype is Keyword and _token.value.upper() == 'FROM':
             from_seen = True
 
@@ -213,32 +250,39 @@ def extract_join_part(token):
             subquery_match = re.match(
                 r"\(([\w\W]+)\)", _token.value[:-len(_token.get_name())], re.MULTILINE
             )
+            # Yield the subquery output when necessary
             if subquery_match:
-                # TODO recurse this to parse subquery
                 subquery = parse_statement(
                     sqlparse.parse(subquery_match.groups()[0])[0],
                     {}
                 )
-                print('------')
-                print('JOIN')
-                print(_token.value)
-                print(f'join_type: {join_type}')
-                print(f'table_name: {_token.get_real_name()}')
-                print(list(subquery.values())[0])
-            # The alias used to reference the table in the query
-            alias = _token.get_name()
-            # The full table name without the schema
-            table_real_name = _token.get_real_name()
-            # The Redshift schema where the table is accessed from
-            redshift_schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
-            yield {
-                alias: {
-                    'join_type':join_type,
-                    'table_name':table_real_name,
-                    'schema':redshift_schema,
-                    'token': _token
+                # The alias used to reference the table in the query
+                alias = _token.get_name()
+                # The full table name without the schema
+                table_real_name = _token.get_real_name()
+                yield {
+                    alias: {
+                        'join_type': join_type,
+                        'subquery': subquery,
+                        'table_name': table_real_name,
+                        'token': _token
+                    }
                 }
-            }
+            else:
+                # The alias used to reference the table in the query
+                alias = _token.get_name()
+                # The full table name without the schema
+                table_real_name = _token.get_real_name()
+                # The Redshift schema where the table is accessed from
+                redshift_schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
+                yield {
+                    alias: {
+                        'join_type': join_type,
+                        'table_name': table_real_name,
+                        'schema': redshift_schema,
+                        'token': _token
+                    }
+                }
         if _token.ttype is Keyword and _token.value.upper() in (
             'LEFT JOIN',
             'RIGHT JOIN',
@@ -308,6 +352,7 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                 k: v for d in joins for k, v in d.items()
             }
         }[comparison_right_alias]
+        # TODO Change encoding to consider subqueries
         if 'join_type' in left:
             output[table_name]['joins'].append({
                 'join_type': left['join_type'],
@@ -341,6 +386,7 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
     return output
 
 def parse_statement(parsed, output):
+    """Parses a tokenized sql_parse token and returns an encoded table."""
     # Get the name of the table being created
     table_name = next(token.value for token in parsed.tokens if isinstance(token, Identifier))
     # Get all the FROM statements's metadata
@@ -350,11 +396,6 @@ def parse_statement(parsed, output):
     # Get all of the comparisons to compare the number of comparisons to the number of JOIN
     # statements
     comparisons = list(extract_comparisons(parsed))
-    # print('------')
-    # print(parsed)
-    # pprint(joins)
-    # pprint(froms)
-
     # Get all the columns selected by this query. The table aliases are used to identify where
     # the columns originate from.
     selects = list(
