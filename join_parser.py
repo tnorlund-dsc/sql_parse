@@ -215,7 +215,6 @@ def extract_from_part(token):
                     # failed.
                     if len(sub_query.values()) > 1:
                         raise Exception(f'Error parsing subquery:\n{_token.value}')
-                    # print('yielding subquery')
                     yield {
                         _token.get_name():{
                             'subquery':  list(sub_query.values())[0],
@@ -260,6 +259,7 @@ def extract_join_part(token):
                 alias = _token.get_name()
                 # The full table name without the schema
                 table_real_name = _token.get_real_name()
+
                 yield {
                     alias: {
                         'join_type': join_type,
@@ -353,7 +353,69 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
             }
         }[comparison_right_alias]
         # TODO Change encoding to consider subqueries
-        if 'join_type' in left:
+        # Add the subquery to the output when there is one.
+        if 'subquery' in right.keys() or 'subquery' in left.keys():
+            if 'subquery' in right.keys():
+                if 'join_type' in left:
+                    output[table_name]['joins'].append({
+                        'join_type': left['join_type'],
+                        'left':{
+                            'schema': left['schema'],
+                            'table_name': left['table_name'],
+                            'column_name': comparison_left_column
+                        },
+                        'right':{
+                            'subquery': right['subquery'],
+                            'table_name': right['table_name']
+                        }
+                    })
+                elif 'join_type' in right:
+                    output[table_name]['joins'].append({
+                        'join_type': right['join_type'],
+                        'left':{
+                            'schema': left['schema'],
+                            'table_name': left['table_name'],
+                            'column_name': comparison_left_column
+                        },
+                        'right':{
+                            'subquery': right['subquery'],
+                            'table_name': right['table_name']
+                        }
+                    })
+                else:
+                    raise Exception('Could not parse Join')
+            elif 'subquery' in left.keys():
+                if 'join_type' in left:
+                    output[table_name]['joins'].append({
+                        'join_type': left['join_type'],
+                        'left':{
+                            'subquery': left['subquery'],
+                            'table_name': left['table_name']
+                        },
+                        'right':{
+                            'schema': right['schema'],
+                            'table_name': right['table_name'],
+                            'column_name': comparison_right_column
+                        }
+                    })
+                elif 'join_type' in right:
+                    output[table_name]['joins'].append({
+                        'join_type': right['join_type'],
+                        'left':{
+                            'subquery': left['subquery'],
+                            'table_name': left['table_name']
+                        },
+                        'right':{
+                            'schema': right['schema'],
+                            'table_name': right['table_name'],
+                            'column_name': comparison_right_column
+                        }
+                    })
+                else:
+                    raise Exception('Could not parse Join')
+            else:
+                raise Exception('Could not parse joins')
+        elif 'join_type' in left:
             output[table_name]['joins'].append({
                 'join_type': left['join_type'],
                 'left':{
@@ -368,6 +430,8 @@ def encode_table(joins, froms, table_name, selects, comparisons, output):
                 },
             })
         elif 'join_type' in right:
+            if not 'schema' in right:
+                print(right)
             output[table_name]['joins'].append({
                 'join_type': right['join_type'],
                 'left':{
