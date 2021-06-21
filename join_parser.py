@@ -4,7 +4,7 @@ import re
 import json
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
-from sqlparse.tokens import Keyword, DML
+from sqlparse.tokens import Keyword, DML, Punctuation
 
 def remove_comments(sql_string):
     """Removes all comments from the given SQL string"""
@@ -144,10 +144,18 @@ def extract_selects(token, aliases):
         else:
             operation = ' '.join(select_statement.split(' ')[:-1])
             column_name = select_statement.split(' ')[-1]
-            yield {
-                'operation': operation,
-                'column_name': column_name
-            }
+            # Add the table and schema when a single table/schema is being selected from
+            if len(aliases) == 1:
+                yield {
+                    'schema': list(aliases.values())[0]['schema'],
+                    'table_name': list(aliases.values())[0]['table_name'],
+                    'column_name': column_name,
+                }
+            else:
+                yield {
+                    'operation': operation,
+                    'column_name': column_name
+                }
 
 def is_subselect(token):
     """Returns whether the token has a ``SELECT`` statement in it"""
@@ -169,7 +177,7 @@ def extract_from_part(token):
             if is_subselect(_token):
                 for __token in extract_from_part(_token):
                     yield __token
-            elif _token.ttype is Keyword:
+            elif _token.ttype is Keyword or _token.ttype is Punctuation:
                 from_seen = False
                 continue
             else:
@@ -448,7 +456,8 @@ def parse_statement(parsed, output):
     return encode_table(joins, froms, table_name, selects, comparisons, output)
 
 sql_contents = open(
-    "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/ddl/stg/stg.erp_invoices.ddl.sql"
+    # "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
+    "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
 ).read()
 out = {}
 
@@ -462,5 +471,6 @@ for sql_statement in sqlparse.split(sql_contents):
     ):
         out = parse_statement(parsed_sql, out)
 
-with open('erp_invoices.json', 'w') as json_file:
+# print(out)
+with open('stg_erp_invoices.json', 'w') as json_file:
     json.dump(out, json_file)
