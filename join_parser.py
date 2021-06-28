@@ -23,7 +23,7 @@ def extract_selects(token, aliases):
     """
     # Search for all of the ``select`` and ``from`` in this token.
     select_matches = list(re.finditer(r'select', token.value.strip(), re.MULTILINE|re.IGNORECASE))
-    from_matches = list(re.finditer(r'from', token.value.strip(), re.MULTILINE|re.IGNORECASE))
+    from_matches = list(re.finditer(r'from\s', token.value.strip(), re.MULTILINE|re.IGNORECASE))
     # Only use the columns in this SELECT statement. This will be all text between the first
     # ``select`` and ``from`` found in this token.
     if len(select_matches) != len(from_matches):
@@ -456,8 +456,9 @@ def parse_statement(parsed, output):
     return encode_table(joins, froms, table_name, selects, comparisons, output)
 
 sql_contents = open(
-    # "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
-    "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
+    "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
+    # "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
+    # "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/transform.spectrum.erp_invoices.sql"
 ).read()
 out = {}
 
@@ -472,5 +473,5 @@ for sql_statement in sqlparse.split(sql_contents):
         out = parse_statement(parsed_sql, out)
 
 # print(out)
-with open('stg_erp_invoices.json', 'w') as json_file:
+with open('dmt_f_invoice.json', 'w') as json_file:
     json.dump(out, json_file)
