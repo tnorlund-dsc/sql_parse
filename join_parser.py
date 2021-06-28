@@ -22,7 +22,7 @@ def extract_selects(token, aliases):
     aliases: dict
     """
     # Search for all of the ``select`` and ``from`` in this token.
-    select_matches = list(re.finditer(r'select', token.value.strip(), re.MULTILINE|re.IGNORECASE))
+    select_matches = list(re.finditer(r'select\s', token.value.strip(), re.MULTILINE|re.IGNORECASE))
     from_matches = list(re.finditer(r'from\s', token.value.strip(), re.MULTILINE|re.IGNORECASE))
     # Only use the columns in this SELECT statement. This will be all text between the first
     # ``select`` and ``from`` found in this token.
