@@ -21,9 +21,11 @@ def extract_selects(token, aliases):
     token: str
     aliases: dict
     """
+    # Remove the comments from the token.
+    sql_no_comments = remove_comments(token.value.strip())
     # Search for all of the ``select`` and ``from`` in this token.
-    select_matches = list(re.finditer(r'select\s', token.value.strip(), re.MULTILINE|re.IGNORECASE))
-    from_matches = list(re.finditer(r'from\s', token.value.strip(), re.MULTILINE|re.IGNORECASE))
+    select_matches = list(re.finditer(r'select\s', sql_no_comments, re.MULTILINE|re.IGNORECASE))
+    from_matches = list(re.finditer(r'from\s', sql_no_comments, re.MULTILINE|re.IGNORECASE))
     # Only use the columns in this SELECT statement. This will be all text between the first
     # ``select`` and ``from`` found in this token.
     if len(select_matches) != len(from_matches):
@@ -34,10 +36,10 @@ def extract_selects(token, aliases):
         raise Exception(
             'No SELECTs and JOINs found in this token:\n{}'.format(token.value.strip())
         )
-    # Remove the comments from the text between the first ``select`` and ``from``.
-    selected_columns = remove_comments(
-        token.value.strip()[select_matches[0].span()[1]:from_matches[0].span()[0]]
-    ).split(',')
+    # Get all of the columns used in the SELECT statement by splitting the text between the first
+    # ``select`` and ``from``.
+    selected_columns = sql_no_comments[select_matches[0].span()[1]:from_matches[0].span()[0]] \
+        .split(',')
     # Use a list and index to iterate over the different select statements.
     select_index = 0
     selects_out = []
@@ -142,10 +144,19 @@ def extract_selects(token, aliases):
                 'column_name': column_name
             }
         else:
+            # Check to see if the column in being casted into a specific data type
+            cast_match = re.match(r'([a-zA-Z0-9_]+)\s*::\s*([a-zA-Z0-9_]+)', select_statement)
             operation = ' '.join(select_statement.split(' ')[:-1])
             column_name = select_statement.split(' ')[-1]
             # Add the table and schema when a single table/schema is being selected from
-            if len(aliases) == 1:
+            if cast_match:
+                yield {
+                    'schema': list(aliases.values())[0]['schema'],
+                    'table_name': list(aliases.values())[0]['table_name'],
+                    'column_name': cast_match.groups()[0],
+                    'cast_type': cast_match.groups()[1]
+                }
+            elif len(aliases) == 1:
                 yield {
                     'schema': list(aliases.values())[0]['schema'],
                     'table_name': list(aliases.values())[0]['table_name'],
