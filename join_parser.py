@@ -48,7 +48,7 @@ def extract_selects(token, aliases):
         if select_statement.count('(') != select_statement.count(')'):
             while select_statement.count('(') != select_statement.count(')'):
                 select_index += 1
-                select_statement += ", " + selected_columns[select_index].strip()
+                select_statement += "," + selected_columns[select_index].strip()
             selects_out.append(select_statement)
             select_index += 1
         else:
