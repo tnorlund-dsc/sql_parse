@@ -4,7 +4,7 @@ import re
 import json
 import os
 import sys
-from typing import Union
+from typing import Union, Tuple
 from dotenv import load_dotenv
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
@@ -57,9 +57,22 @@ class Column():
         self.default_value = default_value
 
     @property
-    def column_name(self):
+    def column_name(self) -> str:
         """Gives the name of the table's column"""
         return self._column_name
+
+    def __str__(self) -> str:
+        return f'{self._column_name}::{self.data_type}'
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def __iter__(self):
+        yield 'name', self._column_name
+        yield 'data_type', self.data_type
+        yield 'data_length', self.data_length
+        yield 'is_nullable', self.is_nullable
+        yield 'default_value', self.default_value
 
 class Table():
     """Object used to store table metadata"""
@@ -70,18 +83,40 @@ class Table():
         self.columns = []
         self.has_queried = False
         self.alias = alias
+        self.is_temp = False
+        if self.schema == self.table_name:
+            self.is_temp = True
 
     def __str__(self) -> str:
-        if self.has_queried:
+        if self.has_queried and not self.is_temp:
             return f'{self.schema}.{self.table_name} with {len(self.columns)} columns'
-        return f'{self.schema}.{self.table_name} not queried from Redshift'
+        elif self.is_temp:
+            return f'TEMP {self.table_name}'
+        else:
+            return f'{self.schema}.{self.table_name} not queried from Redshift'
 
     def __repr__(self) -> str:
         return str(self)
 
+    def __iter__(self):
+        yield 'schema', self.schema
+        yield 'name', self.table_name
+        yield 'alias', self.alias
+        yield 'columns', [dict(column) for column in self.columns]
+
     def has_column(self, column_name:str) -> bool:
         """Returns whether the table has a column with a specific name"""
         return len([column for column in self.columns if column.column_name == column_name]) == 1
+
+    def get_column(self, column_name:str) -> Column:
+        """Returns the column from the table"""
+        if not self.has_column(column_name) and not self.is_temp:
+            raise Exception(f'`{self.schema}.{self.table_name}` does not have column `{column_name}`')
+        if self.is_temp:
+            return Column(column_name, 'UNKNOWN', 0, 'UNKNOWN', None)
+        else:
+            return [column for column in self.columns if column.column_name == column_name][0]
+
 
     def query_data(self) -> None:
         """Queries the table's metadata from Redshift"""
@@ -111,24 +146,57 @@ class Table():
 class JoinComparison():
     """Object used to store the comparison used in a JOIN statement"""
     def __init__(
-        self, left_column:Union[str,Table], right_column:Union[str,Table], operator:str
+        self,
+        left_column:Union[str, Tuple[Column, Table]],
+        right_column:Union[str,Tuple[Column, Table]],
+        operator:str
     ) -> None:
-        self.left = left_column
-        self.right = right_column
+        if isinstance(left_column, str):
+            self.left = left_column
+            self.left_str = True
+            self.left_table = None
+            self.left_column = None
+        else:
+            self.left_str = False
+            self.left_table = left_column[1]
+            self.left_column = left_column[0]
+        if isinstance(right_column, str):
+            self.right = right_column
+            self.right_str = True
+            self.right_table = None
+            self.right_column = None
+        else:
+            self.right_str = False
+            self.right_table = right_column[1]
+            self.right_column = right_column[0]
         self.operator = operator
 
     def __str__(self) -> str:
         if self.operator == '=':
-            return f'{self.left} equals {self.right}'
-        if self.operator == '>':
-            return f'{self.left} greater than {self.right}'
-        if self.operator == '>=':
-            return f'{self.left} greater than or equal to {self.right}'
-        if self.operator == '<':
-            return f'{self.left} less than {self.right}'
-        if self.operator == '<=':
-            return f'{self.left} less than or equal to {self.right}'
-        return f'Cannot find operator: {self.operator}'
+            _operator = 'equals'
+        elif self.operator == '>':
+            _operator = 'greater than'
+        elif self.operator == '>=':
+            _operator = 'greater than or equal to'
+        elif self.operator == '<':
+            _operator = 'less than'
+        elif self.operator == '<=':
+            _operator = 'less than or equal to'
+        else:
+            return f'Cannot find operator: {self.operator}'
+        if self.left_str:
+            _left = self.left
+        else:
+            _left = '.'.join([
+                self.left_table.schema, self.left_table.table_name, self.left_column.column_name
+            ])
+        if self.right_str:
+            _right = self.right
+        else:
+            _right = '.'.join([
+               self.right_table.schema, self.right_table.table_name, self.right_column.column_name
+            ])
+        return f'{_left} {_operator} {_right}'
 
     def __repr__(self):
         return str(self)
@@ -394,29 +462,41 @@ def extract_join_part(token, redshift_cursor):
         # print(_token.value)
         # print(isinstance(_token, Comparison))
         if comparisons and isinstance(_token, Comparison):
+            # Remove the comments from the token
+            _token_no_comments = sqlparse.parse(
+                sqlparse.format(_token.value, strip_comments=True).strip()
+            )[0].tokens[0]
+            # print('_token_no_comments.right')
+            # print(_token_no_comments.right)
+            left_tables = [
+                table for table in tables
+                if table.alias == str(_token_no_comments.left).split('.')[0]
+            ]
+            right_tables = [
+                table for table in tables
+                if table.alias == str(_token_no_comments.right).split('.')[0]
+            ]
+            # print(f'Number right tables: {len(right_tables)}')
+            if len(left_tables) == 1:
+                left_table = left_tables[0]
+                left_column = left_table.get_column(str(_token_no_comments.left).split('.')[1])
+            if len(right_tables) == 1:
+                right_table = right_tables[0]
+                right_column = right_table.get_column(str(_token_no_comments.right).split('.')[1])
             comparison = JoinComparison(
-                _token.left,
-                _token.right,
-                _token.value
-                    .replace(str(_token.left), '')
-                    .replace(str(_token.right), '')
+                (left_column, left_table),
+                (right_column, right_table),
+                _token_no_comments.value
+                    .replace(str(_token_no_comments.left), '')
+                    .replace(str(_token_no_comments.right), '')
                     .strip()
             )
             join.add_comparison(comparison)
-            print('comparisons')
-            print(comparison)
-            print(_token.value)
-            # print(_token.left)
-            # print(_token.right)
-            # print(left_comparison)
-            # print(
-            #     _token.value
-            #         .replace(str(_token.left), '')
-            #         .replace(str(_token.right), '')
-            #         .strip()
-            # )
-            # print(right_comparison)
+            # print('comparisons')
+            # print(comparison)
+            # print(_token_no_comments.value)
         if join_type:
+            # TODO: Implement subquery match with pythonic objects
             # Find the different comparisons used in this join. The join type is now known and the
             # comparisons must be set.
             if _token.ttype is Keyword:
@@ -452,10 +532,13 @@ def extract_join_part(token, redshift_cursor):
                 table_real_name = _token.get_real_name()
                 # The Redshift schema where the table is accessed from
                 redshift_schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
-                this_table = Table(redshift_schema, table_real_name, redshift_cursor, alias)
-                this_table.query_data()
-                tables.append(this_table)
-                print([table.alias for table in tables])
+                if not alias in [table.alias for table in tables]:
+                    this_table = Table(redshift_schema, table_real_name, redshift_cursor, alias)
+                    this_table.query_data()
+                    tables.append(this_table)
+                    print(f'Appending this table ({this_table.alias}):')
+                    print(this_table)
+                    print([table.alias for table in tables])
                 yield {
                     alias: {
                         'join_type': join_type,
@@ -652,6 +735,8 @@ def parse_statement(parsed, output):
         this_table = Table(
             table_name.split('.')[0], table_name.split('.')[1], cursor
         )
+        print(f'Appending this table ({this_table.alias}):')
+        print(this_table)
         this_table.query_data()
         tables.append(this_table)
     elif len(table_name.split('.')) == 3 \
@@ -659,12 +744,15 @@ def parse_statement(parsed, output):
         this_table = Table(
             table_name.split('.')[1], table_name.split('.')[2], cursor
         )
+        print('Appending this table')
+        print(this_table)
         this_table.query_data()
         tables.append(this_table)
+    # print(this_table)
     # Get all the FROM statements's metadata
     froms = {k: v for d in extract_from_part(parsed, cursor) for k, v in d.items()}
     print('Tables:')
-    print([table.alias for table in tables])
+    print([table for table in tables])
     # Get all the JOIN statements's metadata
     joins = list(extract_join_part(parsed, cursor))
     # Get all of the comparisons to compare the number of comparisons to the number of JOIN
@@ -682,8 +770,8 @@ def parse_statement(parsed, output):
     return encode_table(joins, froms, table_name, selects, comparisons, output)
 
 sql_contents = open(
-    "/Users/tnorlund/etl_aws_copy/apps/dm-tmp-transform-prod/sql/transform.tmp.daily_active_subs_and_frequency_poc.sql"
-    # "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
+    # "/Users/tnorlund/etl_aws_copy/apps/dm-tmp-transform-prod/sql/transform.tmp.daily_active_subs_and_frequency_poc.sql"
+    "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
     # "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
     # "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/transform.spectrum.erp_invoices.sql"
 ).read()
@@ -698,6 +786,8 @@ for sql_statement in sqlparse.split(sql_contents):
         or parsed_sql.tokens[0].value.upper() == 'INSERT'
     ):
         out = parse_statement(parsed_sql, out)
+    print('FINISHED STATEMENT')
+    tables = []
 
 # print(out)
 with open('dmt_f_invoice.json', 'w') as json_file:
