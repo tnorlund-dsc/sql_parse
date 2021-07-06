@@ -10,6 +10,7 @@ import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML, Punctuation
 import psycopg2
+from pprint import pprint
 
 # Load the values found in the local ``.env`` file.
 load_dotenv()
@@ -111,14 +112,14 @@ class Table():
     def get_column(self, column_name:str) -> Column:
         """Returns the column from the table"""
         if not self.has_column(column_name) and not self.is_temp:
-            raise Exception(f'`{self.schema}.{self.table_name}` does not have column `{column_name}`')
+            raise Exception(
+                f'`{self.schema}.{self.table_name}` does not have column `{column_name}`'
+            )
         if self.is_temp:
             return Column(column_name, 'UNKNOWN', 0, 'UNKNOWN', None)
-        else:
-            return [column for column in self.columns if column.column_name == column_name][0]
+        return [column for column in self.columns if column.column_name == column_name][0]
 
-
-    def query_data(self) -> None:
+    def query_data(self):
         """Queries the table's metadata from Redshift"""
         self.has_queried = True
         self.redshift_cursor.execute(
@@ -135,13 +136,12 @@ class Table():
                 + f' AND table_schema = \'{self.schema}\'' \
             + ' ORDER BY ordinal_position;'
         )
-        # connection.commit()
         self.columns = [
             Column(
                 details[1], details[2], details[3], details[4], details[5]
             ) for details in self.redshift_cursor.fetchall()
         ]
-        # connection.commit() is this needed??
+        return self
 
 class JoinComparison():
     """Object used to store the comparison used in a JOIN statement"""
@@ -201,15 +201,428 @@ class JoinComparison():
     def __repr__(self):
         return str(self)
 
+    def __iter__(self):
+        if isinstance(self.left_str, str):
+            yield 'left', self.left
+        else:
+            yield 'left', {'table': self.left_table, 'column':self.left_column}
+        if isinstance(self.right_str, str):
+            yield 'right', self.right
+        else:
+            yield 'right', {'table': self.right_table, 'column':self.right_column}
+        yield 'operator', self.operator
+
 class Join():
     """Object used to store a SQL join statement and its comparisons"""
     def __init__(self, join_type:str) -> None:
         self.join_type = join_type
         self.comparisons = []
+    
+    def __iter__(self):
+        yield 'type', self.join_type
+        yield 'comparisons', [dict(_comparison) for _comparison in self.comparisons]
 
     def add_comparison(self, comparison:JoinComparison) -> None:
         """Adds a comparison to the list of the Join's comparisons"""
         self.comparisons.append(comparison)
+
+class ParsedStatement():
+    """Object used to store a parsed SQL statement"""
+    def __init__(self, tokens, file_name:str, redshift_cursor) -> None:
+        self.tokens = tokens
+        self.table = None
+        self.file_name = file_name
+        self.cursor = redshift_cursor
+        self.table_cache = []
+        # self.froms = []
+        self.joins = []
+        self.destination_table = None
+
+    def __str__(self) -> str:
+        if self.table is None:
+            return 'Still need to parse'
+        return f'{self.table.table_name} depends on '
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def __iter__(self):
+        yield 'tokens', self.tokens
+        yield 'table', self.table
+        yield 'file_name', self.file_name
+        # yield 'froms', [dict(_from) for _from in self.froms]
+        yield 'joins', [dict(_join) for _join in self.joins]
+
+    def has_alias_in_cache(self, alias:str):
+        """Returns whether the given table alias is found in the cached tables"""
+        return alias in [_table.alias for _table in self.table_cache]
+
+    def _parse_selects(self):
+        # Remove the comments from the token.
+        sql_no_comments = remove_comments(self.tokens.value.strip())
+        # Search for all of the ``select`` and ``from`` in this token.
+        select_matches = list(re.finditer(r'select\s', sql_no_comments, re.MULTILINE|re.IGNORECASE))
+        from_matches = list(re.finditer(r'from\s', sql_no_comments, re.MULTILINE|re.IGNORECASE))
+        # Only use the columns in this SELECT statement. This will be all text between the first
+        # ``select`` and ``from`` found in this token.
+        if len(select_matches) != len(from_matches):
+            raise Exception(
+                'The number of SELECTs and JOINs did not match:\n{}'.format(self.tokens.value.strip())
+            )
+        if len(select_matches) == 0 or len(from_matches) == 0:
+            raise Exception(
+                'No SELECTs and JOINs found in this token:\n{}'.format(self.tokens.value.strip())
+            )
+        # Get all of the columns used in the SELECT statement by splitting the text between the first
+        # ``select`` and ``from``.
+        selected_columns = sql_no_comments[select_matches[0].span()[1]:from_matches[0].span()[0]] \
+            .split(',')
+        # Use a list and index to iterate over the different select statements.
+        select_index = 0
+        selects_out = []
+        # Iterate over the different selected columns and group them together by ensuring they
+        # maintain the same number of opening and closing paranthesis.
+        while select_index < len(selected_columns):
+            select_statement = selected_columns[select_index].strip()
+            if select_statement.count('(') != select_statement.count(')'):
+                while select_statement.count('(') != select_statement.count(')'):
+                    select_index += 1
+                    select_statement += "," + selected_columns[select_index].strip()
+                selects_out.append(select_statement)
+                select_index += 1
+            else:
+                selects_out.append(
+                    ' '.join([line.strip() for line in select_statement.split('\n')])
+                )
+                select_index += 1
+        # Iterate over the different select statements to find how the column is used
+        for select_statement in selects_out:
+            # Find the select statements that have just the schema and the column name from the
+            # origin table.
+            same_name_match = re.match(r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)$', select_statement)
+            # Find the select statements with the schema, the column name, and this column's
+            # aliased name with the keyword ``as```.
+            rename_match_with_as = re.match(
+                r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+as\s+([a-zA-Z0-9_]+)$',
+                select_statement,
+                re.IGNORECASE
+            )
+            # Find the select statements with the schema, the column name, and this column's
+            # aliased name without the ``as`` keyword.
+            rename_match_without_as = re.match(
+                r'([a-zA-Z0-9_]+)\.([a-zA-Z0-9_]+)\s+([a-zA-Z0-9_]+)$', select_statement
+            )
+            # Find the functions applied to the column, aliased with another column name with the
+            # keyword ``as``.
+            function_match = re.search(
+                r'([\w\W]+)\s+as\s+([a-zA-Z0-9_]+)$', select_statement, re.MULTILINE|re.IGNORECASE
+            )
+            if same_name_match:
+                table_alias = same_name_match.groups()[0]
+                column_name = same_name_match.groups()[1]
+                # print('-----')
+                # print(table_alias)
+                # print(column_name)
+                # print(aliases)
+                # print(select_statement)
+                # Yield the subquery and the column name when referencing a subquery
+                if 'subquery' in aliases[table_alias].keys():
+                    yield {
+                        'column_name': column_name,
+                        'table_alias': table_alias,
+                        'subquery': list(aliases[table_alias]['subquery'].values())[0]
+                    }
+                else:
+                    yield {
+                        'schema': aliases[table_alias]['schema'],
+                        'table_name': aliases[table_alias]['table_name'],
+                        'column_name': column_name,
+                        'column_from': column_name,
+                        'table_alias': table_alias
+                    }
+            elif rename_match_with_as or rename_match_without_as:
+                if rename_match_without_as:
+                    table_alias = rename_match_without_as.groups()[0]
+                    column_from = rename_match_without_as.groups()[1]
+                    column_name = rename_match_without_as.groups()[2]
+                    # Yield the column name and the alias's name when referencing a subquery.
+                    if aliases[table_alias]['schema'][0] == '(':
+                        yield {
+                            'column_name': column_name,
+                            'table_alias': table_alias
+                        }
+                    else:
+                        yield {
+                            'schema': aliases[table_alias]['schema'],
+                            'table_name': aliases[table_alias]['table_name'],
+                            'column_name': column_name,
+                            'column_from': column_from,
+                            'table_alias': table_alias
+                        }
+                else:
+                    table_alias = rename_match_with_as.groups()[0]
+                    column_from = rename_match_with_as.groups()[1]
+                    column_name = rename_match_with_as.groups()[2]
+                    # Yield the subquery and the column name when referencing a subquery
+                    if 'subquery' in aliases[table_alias].keys():
+                        yield {
+                            'column_name': column_name,
+                            'table_alias': table_alias,
+                            'subquery': list(aliases[table_alias]['subquery'].values())[0]
+                        }
+                    else:
+                        yield {
+                            'schema': aliases[table_alias]['schema'],
+                            'table_name': aliases[table_alias]['table_name'],
+                            'column_name': column_name,
+                            'column_from': column_from,
+                            'table_alias': table_alias
+                        }
+            elif function_match:
+                operation = function_match.groups()[0]
+                column_name = function_match.groups()[1]
+                yield {
+                    'operation': operation,
+                    'column_name': column_name
+                }
+            else:
+                # Check to see if the column in being casted into a specific data type
+                cast_match = re.match(r'([a-zA-Z0-9_]+)\s*::\s*([a-zA-Z0-9_]+)', select_statement)
+                operation = ' '.join(select_statement.split(' ')[:-1])
+                column_name = select_statement.split(' ')[-1]
+                # Add the table and schema when a single table/schema is being selected from
+                if cast_match:
+                    yield {
+                        'schema': list(aliases.values())[0]['schema'],
+                        'table_name': list(aliases.values())[0]['table_name'],
+                        'column_name': cast_match.groups()[0],
+                        'cast_type': cast_match.groups()[1]
+                    }
+                elif len(aliases) == 1:
+                    yield {
+                        'schema': list(aliases.values())[0]['schema'],
+                        'table_name': list(aliases.values())[0]['table_name'],
+                        'column_name': column_name,
+                    }
+                else:
+                    yield {
+                        'operation': operation,
+                        'column_name': column_name
+                    }
+
+    def _parse_table(self):
+        print('_parse_table()')
+        # Get the name of the table being created
+        _table_name = next(token.value for token in self.tokens if isinstance(token, Identifier))
+        # Add the table metadata to the cached tables to access later.
+        if len(_table_name.split('.')) == 2 \
+            and not found_table(_table_name.split('.')[0], _table_name.split('.')[1]):
+            _table = Table(
+                _table_name.split('.')[0], _table_name.split('.')[1], self.cursor
+            ).query_data()
+            self.table = _table
+            self.table_cache.append(_table)
+            self.destination_table = _table
+        elif len(_table_name.split('.')) == 3 \
+            and not found_table(_table_name.split('.')[1], _table_name.split('.')[2]):
+            _table = Table(
+                _table_name.split('.')[1], _table_name.split('.')[2], self.cursor
+            ).query_data()
+            self.table = _table
+            self.table_cache.append(_table)
+            self.destination_table = _table
+        else:
+            _table = Table(_table_name, _table_name, self.cursor)
+            self.table = _table
+            self.table_cache.append(_table)
+
+    def _parse_froms(self, token):
+        """Yields the ``FROM`` portion of a query"""
+        print('_parse_froms')
+        from_seen = False
+        # Iterate over the differnet tokens
+        for _token in token.tokens:
+            if _token.is_whitespace:
+                continue
+            if from_seen:
+                if is_subselect(_token):
+                    print('subselect')
+                    print(_token)
+                    # for __token in extract_from_part(_token, self.cursor):
+                        # yield __token
+                elif _token.ttype is Keyword or _token.ttype is Punctuation:
+                    from_seen = False
+                    continue
+                else:
+                    # The alias used to reference the table in the query
+                    alias = _token.get_name()
+                    # When the alias is found as `None`, there is no ``FROM`` found in this query.
+                    # TODO figure out why this condition is here
+                    # if alias is None:
+                    #     return
+                    # The full table name without the schema
+                    table_real_name = _token.get_real_name()
+                    # The Redshift schema where the table is accessed from
+                    schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
+                    # When the schema starts with an opening paranthesis, ``(``, there is a subquery
+                    # used in this FROM statement. It must be recursively iterated upon.
+                    # TODO handle additional ParsedStatement()
+                    if schema[0] == '(':
+                        _sub_query = ParsedStatement(
+                            sqlparse.parse(
+                                re.sub(r'\)\s+' + table_real_name, '', _token.value)[1:]
+                            )[0],
+                            self.file_name,
+                            self.cursor
+                        )
+                        _sub_query.parse()
+                        # sub_query = parse_statement(
+                        #     sqlparse.parse(
+                        #         re.sub(r'\)\s+' + table_real_name, '', _token.value)[1:]
+                        #     )[0],
+                        #     {}
+                        # )
+                        # When there are more than 1 values found in this recursive step, the
+                        # parsing failed.
+                        # if len(sub_query.values()) > 1:
+                        #     raise Exception(f'Error parsing subquery:\n{_token.value}')
+                        # yield {
+                        #     _token.get_name():{
+                        #         'subquery':  list(sub_query.values())[0],
+                        #         'token': _token
+                        #     }
+                        # }
+                    # Otherwise, the FROM portion of this statement is referencing another table.
+                    else:
+                        _table = Table(schema, table_real_name, self.cursor, alias)
+                        _table.query_data()
+                        self.table_cache.append(_table)
+                        # self.froms.append(_table)
+            if _token.ttype is Keyword and _token.value.upper() == 'FROM':
+                from_seen = True
+
+    def _parse_joins(self, token):
+        """Yields the ``JOIN`` portion of a query"""
+        print('Tyler')
+        print('_parse_joins()')
+        join = None
+        join_type = None
+        comparisons = False
+        for _token in token.tokens:
+            # Ingore all whitespace tokens.
+            # NOTE: The sqlparse packages considers comparisons as `whitespace`.
+            if _token.is_whitespace and not isinstance(_token, Comparison):
+                continue
+            if comparisons and isinstance(_token, Comparison):
+                # Remove the comments from the token
+                _token_no_comments = sqlparse.parse(
+                    sqlparse.format(_token.value, strip_comments=True).strip()
+                )[0].tokens[0]
+                left_tables = [
+                    _table for _table in self.table_cache
+                    if _table.alias == str(_token_no_comments.left).split('.')[0]
+                ]
+                right_tables = [
+                    _table for _table in self.table_cache
+                    if _table.alias == str(_token_no_comments.right).split('.')[0]
+                ]
+                if len(left_tables) == 1:
+                    left_table = left_tables[0]
+                    left_column = left_table.get_column(
+                        str(_token_no_comments.left).split('.')[1]
+                    )
+                if len(right_tables) == 1:
+                    right_table = right_tables[0]
+                    right_column = right_table.get_column(
+                        str(_token_no_comments.right).split('.')[1]
+                    )
+                comparison = JoinComparison(
+                    (left_column, left_table),
+                    (right_column, right_table),
+                    _token_no_comments.value
+                        .replace(str(_token_no_comments.left), '')
+                        .replace(str(_token_no_comments.right), '')
+                        .strip()
+                )
+                join.add_comparison(comparison)
+                self.joins.append(join)
+            if join_type:
+                # TODO: Implement subquery match with pythonic objects
+                # Find the different comparisons used in this join. The join type is now known and the
+                # comparisons must be set.
+                if _token.ttype is Keyword:
+                    comparisons = True
+                    join_type = None
+                    continue
+                # Match the value found to see if there is a JOIN using a subquery
+                subquery_match = re.match(
+                    r"\(([\w\W]+)\)", _token.value[:-len(_token.get_name())], re.MULTILINE
+                )
+                # Yield the subquery output when necessary
+                if subquery_match:
+                    print('MATCHED SUBQUERY!!!')
+                    # subquery = parse_statement(
+                    #     sqlparse.parse(subquery_match.groups()[0])[0],
+                    #     {}
+                    # )
+                    # print('subquery')
+                    # print(subquery)
+                    # The alias used to reference the table in the query
+                    alias = _token.get_name()
+                    # The full table name without the schema
+                    table_real_name = _token.get_real_name()
+                    # yield {
+                    #     alias: {
+                    #         'join_type': join_type,
+                    #         'subquery': subquery,
+                    #         'table_name': table_real_name,
+                    #         'token': _token
+                    #     }
+                    # }
+                # Just the alias of the table is given in this token. Store the table and the alias
+                # in the object's ``table_cache``.
+                else:
+                    # The alias used to reference the table in the query
+                    alias = _token.get_name()
+                    # The full table name without the schema
+                    table_real_name = _token.get_real_name()
+                    # The Redshift schema where the table is accessed from
+                    redshift_schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
+                    if not self.has_alias_in_cache(alias):
+                    # if not alias in [table.alias for table in tables]:
+                        _table = Table(redshift_schema, table_real_name, self.cursor, alias)
+                        _table.query_data()
+                        self.table_cache.append(_table)
+                        print(f'Appending this table ({_table.alias}):')
+                        # print(this_table)
+                        print([_table.alias for _table in self.table_cache])
+                    # yield {
+                    #     alias: {
+                    #         'join_type': join_type,
+                    #         'table_name': table_real_name,
+                    #         'schema': redshift_schema,
+                    #         'token': _token
+                    #     }
+                    # }
+            if _token.ttype is Keyword and _token.value.upper() in (
+                'JOIN',
+                'LEFT JOIN',
+                'RIGHT JOIN',
+                'INNER JOIN',
+                'FULL JOIN',
+                'LEFT OUTER JOIN',
+                'FULL OUTER JOIN'
+            ):
+                join_type = _token.value.upper()
+                join = Join(_token.value.upper())
+
+    def parse(self) -> None:
+        """Parses the SQL statement for dependencies"""
+        print('parse()')
+        self._parse_table()
+        self._parse_froms(self.tokens)
+        self._parse_joins(self.tokens)
+        pprint(dict(self))
 
 def remove_comments(sql_string:str) -> None:
     """Removes all comments from the given SQL string"""
@@ -509,10 +922,13 @@ def extract_join_part(token, redshift_cursor):
             )
             # Yield the subquery output when necessary
             if subquery_match:
+                print('MATCHED SUBQUERY!!!')
                 subquery = parse_statement(
                     sqlparse.parse(subquery_match.groups()[0])[0],
                     {}
                 )
+                print('subquery')
+                print(subquery)
                 # The alias used to reference the table in the query
                 alias = _token.get_name()
                 # The full table name without the schema
@@ -775,6 +1191,21 @@ sql_contents = open(
     # "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
     # "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/transform.spectrum.erp_invoices.sql"
 ).read()
+sql_contents = """
+CREATE TEMP TABLE dm_delta AS
+select distinct i.customer_id as customer_id
+from stg.erp_invoices i
+  inner join stg.orders o
+    on i.order_id = o.id
+  left outer join stg.erp_shipments s
+    on i.order_id = s.order_id
+where (
+         i.dsc_processed_at >= '<start_date>'::timestamp  -  interval '1 day'
+         OR o.updated_at >= '<start_date>'::timestamp -  interval '1 day'
+         OR s.dsc_processed_at >= '<start_date>'::timestamp -  interval '1 day'
+       )
+;
+"""
 out = {}
 
 for sql_statement in sqlparse.split(sql_contents):
@@ -785,6 +1216,14 @@ for sql_statement in sqlparse.split(sql_contents):
         parsed_sql.tokens[0].value.upper() == 'CREATE'
         or parsed_sql.tokens[0].value.upper() == 'INSERT'
     ):
+        _statement = ParsedStatement(
+            parsed_sql,
+            '/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql',
+            cursor
+        )
+        _statement.parse()
+        print(_statement)
+        # print(type(parsed_sql))
         out = parse_statement(parsed_sql, out)
     print('FINISHED STATEMENT')
     tables = []
