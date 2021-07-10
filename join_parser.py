@@ -2,11 +2,148 @@
 """
 import re
 import json
+import os
+import sys
+from typing import Union
+from dotenv import load_dotenv
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML, Punctuation
+import psycopg2
 
-def remove_comments(sql_string):
+# Load the values found in the local ``.env`` file.
+load_dotenv()
+
+PARSE_PATH = os.getenv('PARSE_PATH')
+HOST = os.getenv("HOST")
+PORT = os.getenv("PORT")
+DATABASE = os.getenv("DATABASE")
+USER = os.getenv("REDSHIFT_USER")
+PASSWORD = os.getenv("PASSWORD")
+
+try:
+    connection = psycopg2.connect(
+        user=USER,
+        password=PASSWORD,
+        host=HOST,
+        port=PORT,
+        database=DATABASE,
+        connect_timeout=1
+    )
+except psycopg2.OperationalError:
+    print('Could not connect to Redshift. Bad credentials or not on VPN?')
+    sys.exit(1)
+cursor = connection.cursor()
+tables = []
+
+def found_table(schema:str, table_name:str) -> bool:
+    """Returns whether the given table is found in the list of cached tables"""
+    return len(
+        [
+            table for table in tables 
+            if table.table_name == table_name and table.schema == schema
+        ]
+    ) == 1
+
+class Column():
+    """Object used to store column metadata"""
+    def __init__( #pylint: disable=R0913
+        self, column_name:str, data_type:str, data_length:int, is_nullable:str, default_value:str
+    ) -> None:
+        self._column_name = column_name
+        self.data_type = data_type.upper()
+        self.data_length = data_length
+        self.is_nullable = is_nullable == 'YES'
+        self.default_value = default_value
+
+    @property
+    def column_name(self):
+        """Gives the name of the table's column"""
+        return self._column_name
+
+class Table():
+    """Object used to store table metadata"""
+    def __init__(self, schema:str, table_name:str, redshift_cursor, alias=None):
+        self.schema = schema
+        self.table_name = table_name
+        self.redshift_cursor = redshift_cursor
+        self.columns = []
+        self.has_queried = False
+        self.alias = alias
+
+    def __str__(self) -> str:
+        if self.has_queried:
+            return f'{self.schema}.{self.table_name} with {len(self.columns)} columns'
+        return f'{self.schema}.{self.table_name} not queried from Redshift'
+
+    def __repr__(self) -> str:
+        return str(self)
+
+    def has_column(self, column_name:str) -> bool:
+        """Returns whether the table has a column with a specific name"""
+        return len([column for column in self.columns if column.column_name == column_name]) == 1
+
+    def query_data(self) -> None:
+        """Queries the table's metadata from Redshift"""
+        self.has_queried = True
+        self.redshift_cursor.execute(
+            'SELECT' \
+                + ' ordinal_position as position,' \
+                + ' column_name,' \
+                + ' data_type,' \
+                + ' coalesce(character_maximum_length, numeric_precision) as max_length,' \
+                + ' is_nullable,' \
+                + ' column_default as default_value' \
+            + ' FROM information_schema.columns' \
+            + ' WHERE' \
+                + f' table_name = \'{self.table_name}\'' \
+                + f' AND table_schema = \'{self.schema}\'' \
+            + ' ORDER BY ordinal_position;'
+        )
+        # connection.commit()
+        self.columns = [
+            Column(
+                details[1], details[2], details[3], details[4], details[5]
+            ) for details in self.redshift_cursor.fetchall()
+        ]
+        # connection.commit() is this needed??
+
+class JoinComparison():
+    """Object used to store the comparison used in a JOIN statement"""
+    def __init__(
+        self, left_column:Union[str,Table], right_column:Union[str,Table], operator:str
+    ) -> None:
+        self.left = left_column
+        self.right = right_column
+        self.operator = operator
+
+    def __str__(self) -> str:
+        if self.operator == '=':
+            return f'{self.left} equals {self.right}'
+        if self.operator == '>':
+            return f'{self.left} greater than {self.right}'
+        if self.operator == '>=':
+            return f'{self.left} greater than or equal to {self.right}'
+        if self.operator == '<':
+            return f'{self.left} less than {self.right}'
+        if self.operator == '<=':
+            return f'{self.left} less than or equal to {self.right}'
+        return f'Cannot find operator: {self.operator}'
+
+    def __repr__(self):
+        return str(self)
+
+class Join():
+    """Object used to store a SQL join statement and its comparisons"""
+    def __init__(self, join_type:str) -> None:
+        self.join_type = join_type
+        self.comparisons = []
+
+    def add_comparison(self, comparison:JoinComparison) -> None:
+        """Adds a comparison to the list of the Join's comparisons"""
+        self.comparisons.append(comparison)
+
+def remove_comments(sql_string:str) -> None:
     """Removes all comments from the given SQL string"""
     return '\n'.join([
         re.sub(r'\-\-[\s0-9a-zA-Z_\.,\\\/\(\)\':=<>+\-*]*$', '', select_line)
@@ -83,6 +220,11 @@ def extract_selects(token, aliases):
         if same_name_match:
             table_alias = same_name_match.groups()[0]
             column_name = same_name_match.groups()[1]
+            # print('-----')
+            # print(table_alias)
+            # print(column_name)
+            # print(aliases)
+            # print(select_statement)
             # Yield the subquery and the column name when referencing a subquery
             if 'subquery' in aliases[table_alias].keys():
                 yield {
@@ -177,7 +319,7 @@ def is_subselect(token):
             return True
     return False
 
-def extract_from_part(token):
+def extract_from_part(token, redshift_cursor):
     """Yields the ``FROM`` portion of a query"""
     from_seen = False
     # Iterate over the differnet tokens
@@ -186,7 +328,7 @@ def extract_from_part(token):
             continue
         if from_seen:
             if is_subselect(_token):
-                for __token in extract_from_part(_token):
+                for __token in extract_from_part(_token, redshift_cursor):
                     yield __token
             elif _token.ttype is Keyword or _token.ttype is Punctuation:
                 from_seen = False
@@ -222,6 +364,9 @@ def extract_from_part(token):
                     }
                 # Otherwise, the FROM portion of this statement is referencing another table.
                 else:
+                    this_table = Table(schema, table_real_name, redshift_cursor, alias)
+                    this_table.query_data()
+                    tables.append(this_table)
                     yield {
                         alias:{
                             'table_name': table_real_name,
@@ -232,16 +377,50 @@ def extract_from_part(token):
         if _token.ttype is Keyword and _token.value.upper() == 'FROM':
             from_seen = True
 
-def extract_join_part(token):
+def extract_join_part(token, froms, redshift_cursor):
     """Yields the ``JOIN`` portion of a query"""
+    join = None
     join_type = None
+    comparisons = False
     for _token in token.tokens:
-        # Ingore all whitespace tokens
-        if _token.is_whitespace:
+        # print(isinstance(_token, Comparison))
+
+        # Ingore all whitespace tokens.
+        # NOTE: The sqlparse packages considers comparisons as `whitespace`.
+        if _token.is_whitespace and not isinstance(_token, Comparison):
             continue
+
+        # print('-----')
+        # print(_token.value)
+        # print(isinstance(_token, Comparison))
+        if comparisons and isinstance(_token, Comparison):
+            comparison = JoinComparison(
+                _token.left,
+                _token.right,
+                _token.value
+                    .replace(str(_token.left), '')
+                    .replace(str(_token.right), '')
+                    .strip()
+            )
+            join.add_comparison(comparison)
+            print('comparisons')
+            print(comparison)
+            print(_token.value)
+            # print(_token.left)
+            # print(_token.right)
+            # print(left_comparison)
+            # print(
+            #     _token.value
+            #         .replace(str(_token.left), '')
+            #         .replace(str(_token.right), '')
+            #         .strip()
+            # )
+            # print(right_comparison)
         if join_type:
-            # Continue over this iteration if the token is a SQL keyword.
+            # Find the different comparisons used in this join. The join type is now known and the
+            # comparisons must be set.
             if _token.ttype is Keyword:
+                comparisons = True
                 join_type = None
                 continue
             # Match the value found to see if there is a JOIN using a subquery
@@ -273,6 +452,10 @@ def extract_join_part(token):
                 table_real_name = _token.get_real_name()
                 # The Redshift schema where the table is accessed from
                 redshift_schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
+                this_table = Table(redshift_schema, table_real_name, redshift_cursor, alias)
+                this_table.query_data()
+                tables.append(this_table)
+                print([table.alias for table in tables])
                 yield {
                     alias: {
                         'join_type': join_type,
@@ -282,6 +465,7 @@ def extract_join_part(token):
                     }
                 }
         if _token.ttype is Keyword and _token.value.upper() in (
+            'JOIN',
             'LEFT JOIN',
             'RIGHT JOIN',
             'INNER JOIN',
@@ -290,6 +474,8 @@ def extract_join_part(token):
             'FULL OUTER JOIN'
         ):
             join_type = _token.value.upper()
+            join = Join(_token.value.upper())
+        print()
 
 def extract_table_identifiers(token_stream):
     """Yields the unique identifiers found in the stream of tokens"""
@@ -315,14 +501,26 @@ def extract_comparisons(token):
     """Gets all comparisons from a parsed SQL statement"""
     for token in token.tokens:
         if isinstance(token, Comparison):
-            match = re.match(
+            column_comparison_match = re.match(
                 r'([a-zA-Z_]+)\.([a-zA-Z_]+)\s+=\s+([a-zA-Z_]+)\.([a-zA-Z_]+)',
                 token.value
             )
-            if match:
+            string_comparison_match = re.match(
+                r'([a-zA-Z_]+)\.([a-zA-Z_]+)\s+=\s+\'([\w\W]+)\'',
+                token.value
+            )
+            if column_comparison_match:
                 yield (
-                    match.groups()[0] + '.' + match.groups()[1],
-                    match.groups()[2] + '.' + match.groups()[3]
+                    column_comparison_match.groups()[0] \
+                        + '.' + column_comparison_match.groups()[1],
+                    column_comparison_match.groups()[2] \
+                        + '.' + column_comparison_match.groups()[3]
+                )
+            elif string_comparison_match:
+                yield (
+                    string_comparison_match.groups()[0] \
+                        + '.' + string_comparison_match.groups()[1],
+                    string_comparison_match.groups()[2]
                 )
             else:
                 raise Exception(f'Could not find comparisons:\n{token.value}')
@@ -448,10 +646,29 @@ def parse_statement(parsed, output):
     """Parses a tokenized sql_parse token and returns an encoded table."""
     # Get the name of the table being created
     table_name = next(token.value for token in parsed.tokens if isinstance(token, Identifier))
+    # Add the table metadata to the cached tables to access later.
+    if len(table_name.split('.')) == 2\
+        and not found_table(table_name.split('.')[0], table_name.split('.')[1]):
+        this_table = Table(
+            table_name.split('.')[0], table_name.split('.')[1], cursor
+        )
+        this_table.query_data()
+        tables.append(this_table)
+    elif len(table_name.split('.')) == 3 \
+        and not found_table(table_name.split('.')[1], table_name.split('.')[2]):
+        this_table = Table(
+            table_name.split('.')[1], table_name.split('.')[2], cursor
+        )
+        this_table.query_data()
+        tables.append(this_table)
     # Get all the FROM statements's metadata
-    froms = {k: v for d in extract_from_part(parsed) for k, v in d.items()}
+    froms = {k: v for d in extract_from_part(parsed, cursor) for k, v in d.items()}
+    print('Tables:')
+    print([table.alias for table in tables])
     # Get all the JOIN statements's metadata
-    joins = list(extract_join_part(parsed))
+    joins = list(extract_join_part(parsed, froms, cursor))
+    print('joins')
+    print(joins)
     # Get all of the comparisons to compare the number of comparisons to the number of JOIN
     # statements
     comparisons = list(extract_comparisons(parsed))
@@ -467,7 +684,8 @@ def parse_statement(parsed, output):
     return encode_table(joins, froms, table_name, selects, comparisons, output)
 
 sql_contents = open(
-    "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
+    "/Users/tnorlund/etl_aws_copy/apps/dm-tmp-transform-prod/sql/transform.tmp.daily_active_subs_and_frequency_poc.sql"
+    # "/Users/tnorlund/etl_aws_copy/apps/dm-transform/sql/transform.dmt.f_invoice.sql"
     # "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
     # "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/transform.spectrum.erp_invoices.sql"
 ).read()

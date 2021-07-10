@@ -1,0 +1,10 @@
+{
+    "cSpell.words": [
+        "froms"
+    ],
+    "python.linting.pylintEnabled": true,
+    "python.linting.lintOnSave": true,
+    "python.linting.pylintUseMinimalCheckers": false,
+    "python.linting.enabled": true,
+    "python.pythonPath": "/Users/tnorlund/opt/anaconda3/envs/sql_parse/bin/python",
+}

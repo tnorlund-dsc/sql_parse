@@ -11,6 +11,7 @@ from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML, Punctuation
 import psycopg2
 from pprint import pprint
+from parse_types import Column, Table, JoinComparison, Join
 
 # Load the values found in the local ``.env`` file.
 load_dotenv()
@@ -46,195 +47,35 @@ def found_table(schema:str, table_name:str) -> bool:
         ]
     ) == 1
 
-class Column():
-    """Object used to store column metadata"""
-    def __init__( #pylint: disable=R0913
-        self, column_name:str, data_type:str, data_length:int, is_nullable:str, default_value:str
-    ) -> None:
-        self._column_name = column_name
-        self.data_type = data_type.upper()
-        self.data_length = data_length
-        self.is_nullable = is_nullable == 'YES'
-        self.default_value = default_value
-
-    @property
-    def column_name(self) -> str:
-        """Gives the name of the table's column"""
-        return self._column_name
-
-    def __str__(self) -> str:
-        return f'{self._column_name}::{self.data_type}'
-
-    def __repr__(self) -> str:
-        return str(self)
-
-    def __iter__(self):
-        yield 'name', self._column_name
-        yield 'data_type', self.data_type
-        yield 'data_length', self.data_length
-        yield 'is_nullable', self.is_nullable
-        yield 'default_value', self.default_value
-
-class Table():
-    """Object used to store table metadata"""
-    def __init__(self, schema:str, table_name:str, redshift_cursor, alias=None):
-        self.schema = schema
-        self.table_name = table_name
-        self.redshift_cursor = redshift_cursor
-        self.columns = []
-        self.has_queried = False
-        self.alias = alias
-        self.is_temp = False
-        if self.schema == self.table_name:
-            self.is_temp = True
-
-    def __str__(self) -> str:
-        if self.has_queried and not self.is_temp:
-            return f'{self.schema}.{self.table_name} with {len(self.columns)} columns'
-        elif self.is_temp:
-            return f'TEMP {self.table_name}'
-        else:
-            return f'{self.schema}.{self.table_name} not queried from Redshift'
-
-    def __repr__(self) -> str:
-        return str(self)
-
-    def __iter__(self):
-        yield 'schema', self.schema
-        yield 'name', self.table_name
-        yield 'alias', self.alias
-        yield 'columns', [dict(column) for column in self.columns]
-
-    def has_column(self, column_name:str) -> bool:
-        """Returns whether the table has a column with a specific name"""
-        return len([column for column in self.columns if column.column_name == column_name]) == 1
-
-    def get_column(self, column_name:str) -> Column:
-        """Returns the column from the table"""
-        if not self.has_column(column_name) and not self.is_temp:
-            raise Exception(
-                f'`{self.schema}.{self.table_name}` does not have column `{column_name}`'
-            )
-        if self.is_temp:
-            return Column(column_name, 'UNKNOWN', 0, 'UNKNOWN', None)
-        return [column for column in self.columns if column.column_name == column_name][0]
-
-    def query_data(self):
-        """Queries the table's metadata from Redshift"""
-        self.has_queried = True
-        self.redshift_cursor.execute(
-            'SELECT' \
-                + ' ordinal_position as position,' \
-                + ' column_name,' \
-                + ' data_type,' \
-                + ' coalesce(character_maximum_length, numeric_precision) as max_length,' \
-                + ' is_nullable,' \
-                + ' column_default as default_value' \
-            + ' FROM information_schema.columns' \
-            + ' WHERE' \
-                + f' table_name = \'{self.table_name}\'' \
-                + f' AND table_schema = \'{self.schema}\'' \
-            + ' ORDER BY ordinal_position;'
-        )
-        self.columns = [
-            Column(
-                details[1], details[2], details[3], details[4], details[5]
-            ) for details in self.redshift_cursor.fetchall()
-        ]
-        return self
-
-class JoinComparison():
-    """Object used to store the comparison used in a JOIN statement"""
-    def __init__(
-        self,
-        left_column:Union[str, Tuple[Column, Table]],
-        right_column:Union[str,Tuple[Column, Table]],
-        operator:str
-    ) -> None:
-        if isinstance(left_column, str):
-            self.left = left_column
-            self.left_str = True
-            self.left_table = None
-            self.left_column = None
-        else:
-            self.left_str = False
-            self.left_table = left_column[1]
-            self.left_column = left_column[0]
-        if isinstance(right_column, str):
-            self.right = right_column
-            self.right_str = True
-            self.right_table = None
-            self.right_column = None
-        else:
-            self.right_str = False
-            self.right_table = right_column[1]
-            self.right_column = right_column[0]
-        self.operator = operator
-
-    def __str__(self) -> str:
-        if self.operator == '=':
-            _operator = 'equals'
-        elif self.operator == '>':
-            _operator = 'greater than'
-        elif self.operator == '>=':
-            _operator = 'greater than or equal to'
-        elif self.operator == '<':
-            _operator = 'less than'
-        elif self.operator == '<=':
-            _operator = 'less than or equal to'
-        else:
-            return f'Cannot find operator: {self.operator}'
-        if self.left_str:
-            _left = self.left
-        else:
-            _left = '.'.join([
-                self.left_table.schema, self.left_table.table_name, self.left_column.column_name
-            ])
-        if self.right_str:
-            _right = self.right
-        else:
-            _right = '.'.join([
-               self.right_table.schema, self.right_table.table_name, self.right_column.column_name
-            ])
-        return f'{_left} {_operator} {_right}'
-
-    def __repr__(self):
-        return str(self)
-
-    def __iter__(self):
-        if isinstance(self.left_str, str):
-            yield 'left', self.left
-        else:
-            yield 'left', {'table': self.left_table, 'column':self.left_column}
-        if isinstance(self.right_str, str):
-            yield 'right', self.right
-        else:
-            yield 'right', {'table': self.right_table, 'column':self.right_column}
-        yield 'operator', self.operator
-
-class Join():
-    """Object used to store a SQL join statement and its comparisons"""
-    def __init__(self, join_type:str) -> None:
-        self.join_type = join_type
-        self.comparisons = []
-    
-    def __iter__(self):
-        yield 'type', self.join_type
-        yield 'comparisons', [dict(_comparison) for _comparison in self.comparisons]
-
-    def add_comparison(self, comparison:JoinComparison) -> None:
-        """Adds a comparison to the list of the Join's comparisons"""
-        self.comparisons.append(comparison)
-
 class ParsedStatement():
-    """Object used to store a parsed SQL statement"""
+    """Object used to store a parsed SQL statement
+    Attributes
+    ----------
+    tokens : sqlparse.sql.Statement()
+        The SQL statement parsed using ``sqlparse``
+    table : String or None
+        The name of the parsed table
+    file_name : str
+        The name of the `.sql` file the statement is from
+    cursor : sqlparse.connection()
+        The ``sqlparse`` database session
+    table_cache : list of parse_types.Table()
+        A cache used to access stored table data
+    selects : list of parse_types.Select()
+        The ``SELECT``s used in the SQL statement
+    subqueries : list of parse_types.ParsedStatemet()
+        The subqueries used in the ``JOIN`` statements
+    joins: list of parse_types.JoinComparison()
+        The table comparisons used the statement
+    """
     def __init__(self, tokens, file_name:str, redshift_cursor) -> None:
         self.tokens = tokens
         self.table = None
         self.file_name = file_name
         self.cursor = redshift_cursor
         self.table_cache = []
-        # self.froms = []
+        self.selects = []
+        self.subqueries = []
         self.joins = []
         self.destination_table = None
 
@@ -267,14 +108,16 @@ class ParsedStatement():
         # ``select`` and ``from`` found in this token.
         if len(select_matches) != len(from_matches):
             raise Exception(
-                'The number of SELECTs and JOINs did not match:\n{}'.format(self.tokens.value.strip())
+                'The number of SELECTs and JOINs did not match:\n' \
+                    + self.tokens.value.strip()
             )
         if len(select_matches) == 0 or len(from_matches) == 0:
             raise Exception(
-                'No SELECTs and JOINs found in this token:\n{}'.format(self.tokens.value.strip())
+                'No SELECTs and JOINs found in this token:\n' \
+                    + self.tokens.value.strip()
             )
-        # Get all of the columns used in the SELECT statement by splitting the text between the first
-        # ``select`` and ``from``.
+        # Get all of the columns used in the SELECT statement by splitting the text between the
+        # first ``select`` and ``from``.
         selected_columns = sql_no_comments[select_matches[0].span()[1]:from_matches[0].span()[0]] \
             .split(',')
         # Use a list and index to iterate over the different select statements.
@@ -320,95 +163,126 @@ class ParsedStatement():
             if same_name_match:
                 table_alias = same_name_match.groups()[0]
                 column_name = same_name_match.groups()[1]
+                if not self.has_alias_in_cache(table_alias):
+                    raise Exception(f'Could not find table with alias {table_alias}')
+                
+                _table = [table for table in self.table_cache if table.alias == table_alias][0]
+
                 # print('-----')
                 # print(table_alias)
                 # print(column_name)
                 # print(aliases)
                 # print(select_statement)
                 # Yield the subquery and the column name when referencing a subquery
-                if 'subquery' in aliases[table_alias].keys():
-                    yield {
+                if self.has_alias_in_cache(table_alias):
+                    print({
                         'column_name': column_name,
                         'table_alias': table_alias,
-                        'subquery': list(aliases[table_alias]['subquery'].values())[0]
-                    }
+                        # 'subquery': list(aliases[table_alias]['subquery'].values())[0]
+                    })
+                # if 'subquery' in aliases[table_alias].keys():
+                    # yield {
+                    #     'column_name': column_name,
+                    #     'table_alias': table_alias,
+                    #     'subquery': list(aliases[table_alias]['subquery'].values())[0]
+                    # }
                 else:
-                    yield {
-                        'schema': aliases[table_alias]['schema'],
-                        'table_name': aliases[table_alias]['table_name'],
+                    print(self.has_alias_in_cache(table_alias))
+                    self.selects.append({
+                        'schema': _table.schema,
+                        'table_name': _table.table_name,
                         'column_name': column_name,
                         'column_from': column_name,
                         'table_alias': table_alias
-                    }
+                    })
+                    # yield {
+                    #     'schema': aliases[table_alias]['schema'],
+                    #     'table_name': aliases[table_alias]['table_name'],
+                    #     'column_name': column_name,
+                    #     'column_from': column_name,
+                    #     'table_alias': table_alias
+                    # }
             elif rename_match_with_as or rename_match_without_as:
                 if rename_match_without_as:
                     table_alias = rename_match_without_as.groups()[0]
                     column_from = rename_match_without_as.groups()[1]
                     column_name = rename_match_without_as.groups()[2]
+                    _table = self.has_alias_in_cache(table_alias)
+                    print(self.has_alias_in_cache(table_alias))
                     # Yield the column name and the alias's name when referencing a subquery.
-                    if aliases[table_alias]['schema'][0] == '(':
-                        yield {
-                            'column_name': column_name,
-                            'table_alias': table_alias
-                        }
-                    else:
-                        yield {
-                            'schema': aliases[table_alias]['schema'],
-                            'table_name': aliases[table_alias]['table_name'],
-                            'column_name': column_name,
-                            'column_from': column_from,
-                            'table_alias': table_alias
-                        }
+                    # if aliases[table_alias]['schema'][0] == '(':
+                    #     yield {
+                    #         'column_name': column_name,
+                    #         'table_alias': table_alias
+                    #     }
+                    # else:
+                    #     self.selects.append({
+                    #         'schema': _table.schema,
+                    #         'table_name': _table.table_name,
+                    #         'column_name': column_name,
+                    #         'column_from': column_from,
+                    #         'table_alias': table_alias
+                    #     })
+                    #     yield {
+                    #         'schema': aliases[table_alias]['schema'],
+                    #         'table_name': aliases[table_alias]['table_name'],
+                    #         'column_name': column_name,
+                    #         'column_from': column_from,
+                    #         'table_alias': table_alias
+                    #     }
                 else:
                     table_alias = rename_match_with_as.groups()[0]
                     column_from = rename_match_with_as.groups()[1]
                     column_name = rename_match_with_as.groups()[2]
+                    print(self.has_alias_in_cache(table_alias))
                     # Yield the subquery and the column name when referencing a subquery
-                    if 'subquery' in aliases[table_alias].keys():
-                        yield {
-                            'column_name': column_name,
-                            'table_alias': table_alias,
-                            'subquery': list(aliases[table_alias]['subquery'].values())[0]
-                        }
-                    else:
-                        yield {
-                            'schema': aliases[table_alias]['schema'],
-                            'table_name': aliases[table_alias]['table_name'],
-                            'column_name': column_name,
-                            'column_from': column_from,
-                            'table_alias': table_alias
-                        }
+                    # if 'subquery' in aliases[table_alias].keys():
+                    #     yield {
+                    #         'column_name': column_name,
+                    #         'table_alias': table_alias,
+                    #         'subquery': list(aliases[table_alias]['subquery'].values())[0]
+                    #     }
+                    # else:
+                    #     yield {
+                    #         'schema': aliases[table_alias]['schema'],
+                    #         'table_name': aliases[table_alias]['table_name'],
+                    #         'column_name': column_name,
+                    #         'column_from': column_from,
+                    #         'table_alias': table_alias
+                    #     }
             elif function_match:
                 operation = function_match.groups()[0]
                 column_name = function_match.groups()[1]
-                yield {
-                    'operation': operation,
-                    'column_name': column_name
-                }
+                self.selects.append({'operation': operation, 'column_name':column_name})
+                # yield {
+                #     'operation': operation,
+                #     'column_name': column_name
+                # }
             else:
                 # Check to see if the column in being casted into a specific data type
                 cast_match = re.match(r'([a-zA-Z0-9_]+)\s*::\s*([a-zA-Z0-9_]+)', select_statement)
                 operation = ' '.join(select_statement.split(' ')[:-1])
                 column_name = select_statement.split(' ')[-1]
+                print(operation)
                 # Add the table and schema when a single table/schema is being selected from
-                if cast_match:
-                    yield {
-                        'schema': list(aliases.values())[0]['schema'],
-                        'table_name': list(aliases.values())[0]['table_name'],
-                        'column_name': cast_match.groups()[0],
-                        'cast_type': cast_match.groups()[1]
-                    }
-                elif len(aliases) == 1:
-                    yield {
-                        'schema': list(aliases.values())[0]['schema'],
-                        'table_name': list(aliases.values())[0]['table_name'],
-                        'column_name': column_name,
-                    }
-                else:
-                    yield {
-                        'operation': operation,
-                        'column_name': column_name
-                    }
+                # if cast_match:
+                #     yield {
+                #         'schema': list(aliases.values())[0]['schema'],
+                #         'table_name': list(aliases.values())[0]['table_name'],
+                #         'column_name': cast_match.groups()[0],
+                #         'cast_type': cast_match.groups()[1]
+                #     }
+                # elif len(aliases) == 1:
+                #     yield {
+                #         'schema': list(aliases.values())[0]['schema'],
+                #         'table_name': list(aliases.values())[0]['table_name'],
+                #         'column_name': column_name,
+                #     }
+                # else:
+                #     yield {
+                #         'operation': operation,
+                #         'column_name': column_name
+                #     }
 
     def _parse_table(self):
         print('_parse_table()')
@@ -565,8 +439,15 @@ class ParsedStatement():
                     #     sqlparse.parse(subquery_match.groups()[0])[0],
                     #     {}
                     # )
+                    print(sqlparse.parse(subquery_match.groups()[0])[0])
                     # print('subquery')
                     # print(subquery)
+                    _subquery = ParsedStatement(
+                        sqlparse.parse(subquery_match.groups()[0])[0],
+                        self.file_name,
+                        self.cursor
+                    )
+                    print(_subquery.parse())
                     # The alias used to reference the table in the query
                     alias = _token.get_name()
                     # The full table name without the schema
@@ -618,11 +499,10 @@ class ParsedStatement():
 
     def parse(self) -> None:
         """Parses the SQL statement for dependencies"""
-        print('parse()')
         self._parse_table()
         self._parse_froms(self.tokens)
         self._parse_joins(self.tokens)
-        pprint(dict(self))
+        self._parse_selects()
 
 def remove_comments(sql_string:str) -> None:
     """Removes all comments from the given SQL string"""
@@ -881,6 +761,7 @@ def extract_join_part(token, redshift_cursor):
             )[0].tokens[0]
             # print('_token_no_comments.right')
             # print(_token_no_comments.right)
+            # TODO Write a separate function for parsin the right and left tables. 
             left_tables = [
                 table for table in tables
                 if table.alias == str(_token_no_comments.left).split('.')[0]
@@ -1191,21 +1072,21 @@ sql_contents = open(
     # "/Users/tnorlund/etl_aws_copy/apps/dm-extract/sql/load.stg.erp_invoices.sql"
     # "/Users/tnorlund/etl_aws_copy/apps/dm-erp-transform/sql/transform.spectrum.erp_invoices.sql"
 ).read()
-sql_contents = """
-CREATE TEMP TABLE dm_delta AS
-select distinct i.customer_id as customer_id
-from stg.erp_invoices i
-  inner join stg.orders o
-    on i.order_id = o.id
-  left outer join stg.erp_shipments s
-    on i.order_id = s.order_id
-where (
-         i.dsc_processed_at >= '<start_date>'::timestamp  -  interval '1 day'
-         OR o.updated_at >= '<start_date>'::timestamp -  interval '1 day'
-         OR s.dsc_processed_at >= '<start_date>'::timestamp -  interval '1 day'
-       )
-;
-"""
+# sql_contents = """
+# CREATE TEMP TABLE dm_delta AS
+# select distinct i.customer_id as customer_id
+# from stg.erp_invoices i
+#   inner join stg.orders o
+#     on i.order_id = o.id
+#   left outer join stg.erp_shipments s
+#     on i.order_id = s.order_id
+# where (
+#          i.dsc_processed_at >= '<start_date>'::timestamp  -  interval '1 day'
+#          OR o.updated_at >= '<start_date>'::timestamp -  interval '1 day'
+#          OR s.dsc_processed_at >= '<start_date>'::timestamp -  interval '1 day'
+#        )
+# ;
+# """
 out = {}
 
 for sql_statement in sqlparse.split(sql_contents):
