@@ -5,6 +5,7 @@ import json
 import os
 import sys
 from typing import Union, Tuple
+from collections import namedtuple
 from dotenv import load_dotenv
 import sqlparse
 from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
@@ -46,6 +47,8 @@ def found_table(schema:str, table_name:str) -> bool:
             if table.table_name == table_name and table.schema == schema
         ]
     ) == 1
+
+Subquery = namedtuple('Subquery', 'alias parsedStatement')
 
 class ParsedStatement():
     """Object used to store a parsed SQL statement
@@ -96,7 +99,17 @@ class ParsedStatement():
 
     def has_alias_in_cache(self, alias:str):
         """Returns whether the given table alias is found in the cached tables"""
-        return alias in [_table.alias for _table in self.table_cache]
+        return alias in [
+            _table.alias for _table in self.table_cache
+        ] + [
+            _subquery.alias for _subquery in self.subqueries
+        ]
+    
+    def get_alias_in_cache(self, alias:str):
+        if alias in [_table.alias for _table in self.table_cache]:
+            return [_table for _table in self.table_cache if _table.alias == alias][0]
+        if alias in [_subquery.alias for _subquery in self.subqueries]:
+            return [_subquery for _subquery in self.subqueries if _subquery.alias == alias][0]
 
     def _parse_selects(self):
         # Remove the comments from the token.
@@ -163,10 +176,32 @@ class ParsedStatement():
             if same_name_match:
                 table_alias = same_name_match.groups()[0]
                 column_name = same_name_match.groups()[1]
+                # Get the aliased table or subquery from the parsed statement
                 if not self.has_alias_in_cache(table_alias):
                     raise Exception(f'Could not find table with alias {table_alias}')
+                _table_or_subquery = self.get_alias_in_cache(table_alias)
+                # Save the table
+                if isinstance(_table_or_subquery, Table):
+                    if not _table_or_subquery.has_column(column_name):
+                        raise Exception(
+                            f'{_table_or_subquery.table_name} does not have {column_name} as a column'
+                        )
+                    self.selects.append({
+                        'column_name': column_name,
+                        'column': _table_or_subquery.get_column(column_name),
+                        'table_alias': table_alias,
+                        'table': _table_or_subquery
+                    })
+                # Save the subquery
+                else:
+                    self.selects.append({
+                        'column_name': column_name,
+                        'table_alias': table_alias,
+                        'subquery': _table_or_subquery
+                    })
+
                 
-                _table = [table for table in self.table_cache if table.alias == table_alias][0]
+                # _table = [table for table in self.table_cache if table.alias == table_alias][0]
 
                 # print('-----')
                 # print(table_alias)
@@ -174,27 +209,27 @@ class ParsedStatement():
                 # print(aliases)
                 # print(select_statement)
                 # Yield the subquery and the column name when referencing a subquery
-                if self.has_alias_in_cache(table_alias):
-                    print({
-                        'column_name': column_name,
-                        'table_alias': table_alias,
-                        # 'subquery': list(aliases[table_alias]['subquery'].values())[0]
-                    })
+                # if self.has_alias_in_cache(table_alias):
+                #     print({
+                #         'column_name': column_name,
+                #         'table_alias': table_alias,
+                #         # 'subquery': list(aliases[table_alias]['subquery'].values())[0]
+                #     })
                 # if 'subquery' in aliases[table_alias].keys():
                     # yield {
                     #     'column_name': column_name,
                     #     'table_alias': table_alias,
                     #     'subquery': list(aliases[table_alias]['subquery'].values())[0]
                     # }
-                else:
-                    print(self.has_alias_in_cache(table_alias))
-                    self.selects.append({
-                        'schema': _table.schema,
-                        'table_name': _table.table_name,
-                        'column_name': column_name,
-                        'column_from': column_name,
-                        'table_alias': table_alias
-                    })
+                # else:
+                #     print(self.has_alias_in_cache(table_alias))
+                #     self.selects.append({
+                #         'schema': _table.schema,
+                #         'table_name': _table.table_name,
+                #         'column_name': column_name,
+                #         'column_from': column_name,
+                #         'table_alias': table_alias
+                #     })
                     # yield {
                     #     'schema': aliases[table_alias]['schema'],
                     #     'table_name': aliases[table_alias]['table_name'],
@@ -207,7 +242,8 @@ class ParsedStatement():
                     table_alias = rename_match_without_as.groups()[0]
                     column_from = rename_match_without_as.groups()[1]
                     column_name = rename_match_without_as.groups()[2]
-                    _table = self.has_alias_in_cache(table_alias)
+                    _table_or_subquery = self.get_alias_in_cache(table_alias)
+                    # Set the 
                     print(self.has_alias_in_cache(table_alias))
                     # Yield the column name and the alias's name when referencing a subquery.
                     # if aliases[table_alias]['schema'][0] == '(':
@@ -234,6 +270,26 @@ class ParsedStatement():
                     table_alias = rename_match_with_as.groups()[0]
                     column_from = rename_match_with_as.groups()[1]
                     column_name = rename_match_with_as.groups()[2]
+                    _table_or_subquery = self.get_alias_in_cache(table_alias)
+                    # Save the table
+                    if isinstance(_table_or_subquery, Table):
+                        if not _table_or_subquery.has_column(column_from):
+                            raise Exception(
+                                f'{_table_or_subquery.table_name} does not have {column_from} as a column'
+                            )
+                        self.selects.append({
+                            'column_name': column_name,
+                            'column': _table_or_subquery.get_column(column_from),
+                            'table_alias': table_alias,
+                            'table': _table_or_subquery
+                        })
+                    # Save the subquery
+                    else:
+                        self.selects.append({
+                            'column_name': column_name,
+                            'table_alias': table_alias,
+                            'subquery': _table_or_subquery
+                        })
                     print(self.has_alias_in_cache(table_alias))
                     # Yield the subquery and the column name when referencing a subquery
                     # if 'subquery' in aliases[table_alias].keys():
@@ -250,14 +306,14 @@ class ParsedStatement():
                     #         'column_from': column_from,
                     #         'table_alias': table_alias
                     #     }
+            # Add the function's call to the select statement
             elif function_match:
                 operation = function_match.groups()[0]
                 column_name = function_match.groups()[1]
-                self.selects.append({'operation': operation, 'column_name':column_name})
-                # yield {
-                #     'operation': operation,
-                #     'column_name': column_name
-                # }
+                self.selects.append({
+                    'operation': operation, 
+                    'column_name':column_name
+                })
             else:
                 # Check to see if the column in being casted into a specific data type
                 cast_match = re.match(r'([a-zA-Z0-9_]+)\s*::\s*([a-zA-Z0-9_]+)', select_statement)
@@ -332,40 +388,25 @@ class ParsedStatement():
                     alias = _token.get_name()
                     # When the alias is found as `None`, there is no ``FROM`` found in this query.
                     # TODO figure out why this condition is here
-                    # if alias is None:
-                    #     return
+                    if alias is None:
+                        # return
+                        continue
                     # The full table name without the schema
                     table_real_name = _token.get_real_name()
                     # The Redshift schema where the table is accessed from
                     schema = _token.value.replace(f".{table_real_name}", '').split(' ')[0]
                     # When the schema starts with an opening paranthesis, ``(``, there is a subquery
                     # used in this FROM statement. It must be recursively iterated upon.
-                    # TODO handle additional ParsedStatement()
                     if schema[0] == '(':
-                        _sub_query = ParsedStatement(
+                        _subquery = ParsedStatement(
                             sqlparse.parse(
                                 re.sub(r'\)\s+' + table_real_name, '', _token.value)[1:]
                             )[0],
                             self.file_name,
                             self.cursor
                         )
-                        _sub_query.parse()
-                        # sub_query = parse_statement(
-                        #     sqlparse.parse(
-                        #         re.sub(r'\)\s+' + table_real_name, '', _token.value)[1:]
-                        #     )[0],
-                        #     {}
-                        # )
-                        # When there are more than 1 values found in this recursive step, the
-                        # parsing failed.
-                        # if len(sub_query.values()) > 1:
-                        #     raise Exception(f'Error parsing subquery:\n{_token.value}')
-                        # yield {
-                        #     _token.get_name():{
-                        #         'subquery':  list(sub_query.values())[0],
-                        #         'token': _token
-                        #     }
-                        # }
+                        _subquery.parse()
+                        self.subqueries.append(Subquery(table_real_name, _subquery))
                     # Otherwise, the FROM portion of this statement is referencing another table.
                     else:
                         _table = Table(schema, table_real_name, self.cursor, alias)
@@ -377,8 +418,6 @@ class ParsedStatement():
 
     def _parse_joins(self, token):
         """Yields the ``JOIN`` portion of a query"""
-        print('Tyler')
-        print('_parse_joins()')
         join = None
         join_type = None
         comparisons = False
@@ -387,6 +426,7 @@ class ParsedStatement():
             # NOTE: The sqlparse packages considers comparisons as `whitespace`.
             if _token.is_whitespace and not isinstance(_token, Comparison):
                 continue
+            # Add the different comparisons used in the join statement
             if comparisons and isinstance(_token, Comparison):
                 # Remove the comments from the token
                 _token_no_comments = sqlparse.parse(
@@ -439,7 +479,7 @@ class ParsedStatement():
                     #     sqlparse.parse(subquery_match.groups()[0])[0],
                     #     {}
                     # )
-                    print(sqlparse.parse(subquery_match.groups()[0])[0])
+                    # print(sqlparse.parse(subquery_match.groups()[0])[0])
                     # print('subquery')
                     # print(subquery)
                     _subquery = ParsedStatement(
@@ -447,9 +487,11 @@ class ParsedStatement():
                         self.file_name,
                         self.cursor
                     )
-                    print(_subquery.parse())
+                    _subquery.parse()
                     # The alias used to reference the table in the query
                     alias = _token.get_name()
+                    if not self.has_alias_in_cache(alias):
+                        self.subqueries.append(Subquery(alias, _subquery))
                     # The full table name without the schema
                     table_real_name = _token.get_real_name()
                     # yield {
@@ -1105,7 +1147,7 @@ for sql_statement in sqlparse.split(sql_contents):
         _statement.parse()
         print(_statement)
         # print(type(parsed_sql))
-        out = parse_statement(parsed_sql, out)
+        # out = parse_statement(parsed_sql, out)
     print('FINISHED STATEMENT')
     tables = []
 
