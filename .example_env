@@ -1,0 +1,6 @@
+PARSE_PATH="example/path/to/apps"
+HOST="<REDSHIFT_CLUSTER>.<SECRET>.<REGION>.redshift.amazonaws.com"
+PORT="5439"
+DATABASE="example_database"
+REDSHIFT_USER="first_name.last_name"
+PASSWORD="example_password"
