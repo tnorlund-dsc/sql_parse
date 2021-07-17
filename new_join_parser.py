@@ -12,7 +12,8 @@ from sqlparse.sql import IdentifierList, Identifier, Comparison, Token
 from sqlparse.tokens import Keyword, DML, Punctuation
 import psycopg2
 from pprint import pprint
-from parse_types import Column, Table, JoinComparison, Join
+from parse_types import Table, JoinComparison, Join
+from Column import Column
 
 # Load the values found in the local ``.env`` file.
 load_dotenv()
@@ -56,7 +57,7 @@ class ParsedStatement():
     ----------
     tokens : sqlparse.sql.Statement()
         The SQL statement parsed using ``sqlparse``
-    table : String or None
+    table : str or None
         The name of the parsed table
     file_name : str
         The name of the `.sql` file the statement is from
@@ -85,7 +86,11 @@ class ParsedStatement():
     def __str__(self) -> str:
         if self.table is None:
             return 'Still need to parse'
-        return f'{self.table.table_name} depends on '
+        return f'''{self.table.table_name} depends on {len([
+            _table.alias for _table in self.table_cache
+        ] + [
+            _subquery.alias for _subquery in self.subqueries
+        ])}'''
 
     def __repr__(self) -> str:
         return str(self)
@@ -341,7 +346,6 @@ class ParsedStatement():
                 #     }
 
     def _parse_table(self):
-        print('_parse_table()')
         # Get the name of the table being created
         _table_name = next(token.value for token in self.tokens if isinstance(token, Identifier))
         # Add the table metadata to the cached tables to access later.
@@ -368,7 +372,6 @@ class ParsedStatement():
 
     def _parse_froms(self, token):
         """Yields the ``FROM`` portion of a query"""
-        print('_parse_froms')
         from_seen = False
         # Iterate over the differnet tokens
         for _token in token.tokens:
