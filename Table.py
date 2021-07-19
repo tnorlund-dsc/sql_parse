@@ -74,7 +74,7 @@ class Table():
                 f'`{self.schema}.{self.table_name}` does not have column `{column_name}`'
             )
         if self.is_temp:
-            return Column(column_name, 'UNKNOWN', 0, 'UNKNOWN', None)
+            return Column(column_name, 'UNKNOWN', 0, 'UNKNOWN', None, self)
         return [column for column in self.columns if column.column_name == column_name][0]
 
     def query_data(self):

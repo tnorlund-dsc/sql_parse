@@ -73,11 +73,11 @@ class JoinComparison():
         if isinstance(self.left_str, str):
             yield 'left', self.left
         else:
-            yield 'left', {'table': self.left_table, 'column':self.left_column}
+            yield 'left', {'table': dict(self.left_table), 'column':dict(self.left_column)}
         if isinstance(self.right_str, str):
             yield 'right', self.right
         else:
-            yield 'right', {'table': self.right_table, 'column':self.right_column}
+            yield 'right', {'table': dict(self.right_table), 'column':dict(self.right_column)}
         yield 'operator', self.operator
 
 class Join():

@@ -4,6 +4,8 @@ import re
 import json
 import os
 import sys
+import pickle
+from time import gmtime, strftime
 from typing import Union, Tuple
 from collections import namedtuple
 from dotenv import load_dotenv
@@ -96,11 +98,27 @@ class ParsedStatement():
         return str(self)
 
     def __iter__(self):
-        yield 'tokens', self.tokens
-        yield 'table', self.table
+        # yield 'tokens', self.tokens
+        if self.table is not None:
+            yield 'table', dict(self.table)
         yield 'file_name', self.file_name
         # yield 'froms', [dict(_from) for _from in self.froms]
         yield 'joins', [dict(_join) for _join in self.joins]
+
+    def dump(self, directory:str):
+        """Dumps the parsed statement as a JSON file"""
+        print(dict(self))
+        time_fmt = "%Y-%m-%d %H:%M:%S"
+        if self.table is not None:
+            with open(f'{directory}/{self.table.table_name}.json', 'w', encoding='utf-8') as f:
+                json.dump(dict(self), f, ensure_ascii=False, indent=4)
+        else:
+            with open(f'{directory}/TEMP_{strftime(time_fmt, gmtime())}.json', 'w', encoding='utf-8') as f:
+                json.dump(dict(self), f, ensure_ascii=False, indent=4)
+        # if self.table is not None:
+        #     pickle.dump(self, open( f"{directory}/{self.table.table_name}.p", "wb"))
+        # else:
+        #     pickle.dump(self, open( f"{directory}/TEMP_{strftime(time_fmt, gmtime())}.p", "wb"))
 
     def has_alias_in_cache(self, alias:str):
         """Returns whether the given table alias is found in the cached tables"""
@@ -109,8 +127,9 @@ class ParsedStatement():
         ] + [
             _subquery.alias for _subquery in self.subqueries
         ]
-    
+
     def get_alias_in_cache(self, alias:str):
+        """Returns the Table or Subquery that has the specific alias"""
         if alias in [_table.alias for _table in self.table_cache]:
             return [_table for _table in self.table_cache if _table.alias == alias][0]
         if alias in [_subquery.alias for _subquery in self.subqueries]:
@@ -244,6 +263,7 @@ class ParsedStatement():
                     # }
             elif rename_match_with_as or rename_match_without_as:
                 if rename_match_without_as:
+                    # rename_without_as
                     table_alias = rename_match_without_as.groups()[0]
                     column_from = rename_match_without_as.groups()[1]
                     column_name = rename_match_without_as.groups()[2]
@@ -272,6 +292,7 @@ class ParsedStatement():
                     #         'table_alias': table_alias
                     #     }
                 else:
+                    # rename_as
                     table_alias = rename_match_with_as.groups()[0]
                     column_from = rename_match_with_as.groups()[1]
                     column_name = rename_match_with_as.groups()[2]
@@ -320,6 +341,7 @@ class ParsedStatement():
                     'column_name':column_name
                 })
             else:
+                # only_name
                 # Check to see if the column in being casted into a specific data type
                 cast_match = re.match(r'([a-zA-Z0-9_]+)\s*::\s*([a-zA-Z0-9_]+)', select_statement)
                 operation = ' '.join(select_statement.split(' ')[:-1])
@@ -1148,7 +1170,7 @@ for sql_statement in sqlparse.split(sql_contents):
             cursor
         )
         _statement.parse()
-        print(_statement)
+        _statement.dump('.')
         # print(type(parsed_sql))
         # out = parse_statement(parsed_sql, out)
     print('FINISHED STATEMENT')
