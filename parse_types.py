@@ -2,11 +2,14 @@ from typing import Union, Tuple
 from Column import Column
 from Table import Table
 
-class Select():
+class SelectStatement():
     def __init__(
-        self, column_name: str
+        self, column_name: str, operation=None, alias=None, subquery=None, column_obj=None
     ) -> None:
         self._column_name = column_name
+        self.operation = operation
+        self.alias = alias
+        subquery = subquery
 
 
 

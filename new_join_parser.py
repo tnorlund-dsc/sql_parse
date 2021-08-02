@@ -4,7 +4,6 @@ import re
 import json
 import os
 import sys
-import pickle
 from time import gmtime, strftime
 from typing import Union, Tuple
 from collections import namedtuple
@@ -16,6 +15,8 @@ import psycopg2
 from pprint import pprint
 from parse_types import Table, JoinComparison, Join
 from Column import Column
+
+# TODO Use SELECT object to represent selects and subqueries requested in the query
 
 # Load the values found in the local ``.env`` file.
 load_dotenv()
@@ -46,7 +47,7 @@ def found_table(schema:str, table_name:str) -> bool:
     """Returns whether the given table is found in the list of cached tables"""
     return len(
         [
-            table for table in tables 
+            table for table in tables
             if table.table_name == table_name and table.schema == schema
         ]
     ) == 1
@@ -101,6 +102,7 @@ class ParsedStatement():
         # yield 'tokens', self.tokens
         if self.table is not None:
             yield 'table', dict(self.table)
+        yield 'selects', [dict(_select) for _select in self.selects]
         yield 'file_name', self.file_name
         # yield 'froms', [dict(_from) for _from in self.froms]
         yield 'joins', [dict(_join) for _join in self.joins]
@@ -108,17 +110,24 @@ class ParsedStatement():
     def dump(self, directory:str):
         """Dumps the parsed statement as a JSON file"""
         print(dict(self))
+        print([dict(_select) for _select in self.selects])
+        if not os.path.exists(directory):
+            os.mkdir(directory)
         time_fmt = "%Y-%m-%d %H:%M:%S"
         if self.table is not None:
-            with open(f'{directory}/{self.table.table_name}.json', 'w', encoding='utf-8') as f:
-                json.dump(dict(self), f, ensure_ascii=False, indent=4)
+            with open(
+                os.path.join(directory, f'{self.table.table_name}.json'),
+                'w',
+                encoding='utf-8'
+            ) as _f:
+                json.dump(dict(self), _f, ensure_ascii=False, indent=4)
         else:
-            with open(f'{directory}/TEMP_{strftime(time_fmt, gmtime())}.json', 'w', encoding='utf-8') as f:
-                json.dump(dict(self), f, ensure_ascii=False, indent=4)
-        # if self.table is not None:
-        #     pickle.dump(self, open( f"{directory}/{self.table.table_name}.p", "wb"))
-        # else:
-        #     pickle.dump(self, open( f"{directory}/TEMP_{strftime(time_fmt, gmtime())}.p", "wb"))
+            with open(
+                os.path.join(directory, f'TEMP_{strftime(time_fmt, gmtime())}.json'),
+                'w',
+                encoding='utf-8'
+            ) as _f:
+                json.dump(dict(self), _f, ensure_ascii=False, indent=4)
 
     def has_alias_in_cache(self, alias:str):
         """Returns whether the given table alias is found in the cached tables"""
@@ -208,7 +217,8 @@ class ParsedStatement():
                 if isinstance(_table_or_subquery, Table):
                     if not _table_or_subquery.has_column(column_name):
                         raise Exception(
-                            f'{_table_or_subquery.table_name} does not have {column_name} as a column'
+                            f'{_table_or_subquery.table_name} does not have {column_name} as a' \
+                                + ' column'
                         )
                     self.selects.append({
                         'column_name': column_name,
@@ -224,7 +234,6 @@ class ParsedStatement():
                         'subquery': _table_or_subquery
                     })
 
-                
                 # _table = [table for table in self.table_cache if table.alias == table_alias][0]
 
                 # print('-----')
@@ -268,8 +277,8 @@ class ParsedStatement():
                     column_from = rename_match_without_as.groups()[1]
                     column_name = rename_match_without_as.groups()[2]
                     _table_or_subquery = self.get_alias_in_cache(table_alias)
-                    # Set the 
-                    print(self.has_alias_in_cache(table_alias))
+                    # Set the
+                    # print(self.has_alias_in_cache(table_alias))
                     # Yield the column name and the alias's name when referencing a subquery.
                     # if aliases[table_alias]['schema'][0] == '(':
                     #     yield {
@@ -301,7 +310,8 @@ class ParsedStatement():
                     if isinstance(_table_or_subquery, Table):
                         if not _table_or_subquery.has_column(column_from):
                             raise Exception(
-                                f'{_table_or_subquery.table_name} does not have {column_from} as a column'
+                                f'{_table_or_subquery.table_name} does not have {column_from} ' \
+                                    + 'as a column'
                             )
                         self.selects.append({
                             'column_name': column_name,
@@ -337,7 +347,7 @@ class ParsedStatement():
                 operation = function_match.groups()[0]
                 column_name = function_match.groups()[1]
                 self.selects.append({
-                    'operation': operation, 
+                    'operation': operation,
                     'column_name':column_name
                 })
             else:
@@ -1170,7 +1180,7 @@ for sql_statement in sqlparse.split(sql_contents):
             cursor
         )
         _statement.parse()
-        _statement.dump('.')
+        _statement.dump('dump/')
         # print(type(parsed_sql))
         # out = parse_statement(parsed_sql, out)
     print('FINISHED STATEMENT')
